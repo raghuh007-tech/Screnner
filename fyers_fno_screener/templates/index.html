@@ -23,18 +23,18 @@
     <div class="metric"><span>F&O stocks</span><strong id="universe">—</strong><small>Unique cash underlyings</small></div>
     <div class="metric"><span>PDH breakouts</span><strong id="pdhCount">—</strong><small>Above previous day high + 3X volume</small></div>
     <div class="metric"><span>+2% momentum</span><strong id="momentumCount">—</strong><small>Daily gain + 3X volume</small></div>
-    <div class="metric"><span>Near 5Y ATH</span><strong id="athCount">—</strong><small>Within 3% of available-history high</small></div>
+    <div class="metric"><span>Near 5Y high</span><strong id="athCount">—</strong><small>Within 3% of five-year high</small></div>
   </section>
 
   <section class="rule-strip">
     <div><b>Volume trigger</b><span>≥ 3.0× average cumulative volume at the same time over 20 prior sessions</span></div>
     <div><b>Daily momentum</b><span>≥ +2.00% from previous close</span></div>
-    <div><b>ATH trigger</b><span>Within 3.00% below the highest daily high in the available five-year data</span></div>
+    <div><b>Five-year high trigger</b><span>Within 3.00% below the highest daily high in the available five-year data. <a class="ath-reference" href="https://strota.in/screens/all-time-high-stocks" target="_blank" rel="noopener noreferrer">Full-history ATH reference ↗</a></span></div>
   </section>
 
   <section class="toolbar">
     <input id="search" type="search" placeholder="Search F&O stock…" autocomplete="off">
-    <select id="signalFilter"><option value="all">All signals</option><option value="PDH BREAKOUT">PDH breakout</option><option value="+2% MOMENTUM">+2% momentum</option><option value="NEAR 5Y ATH">Near 5Y ATH</option><option value="multiple">Multiple signals</option></select>
+    <select id="signalFilter"><option value="all">All signals</option><option value="PDH BREAKOUT">PDH breakout</option><option value="+2% MOMENTUM">+2% momentum</option><option value="NEAR 5Y HIGH">Near 5Y high</option><option value="multiple">Multiple signals</option></select>
     <select id="sort"><option value="signal_count">Sort: strongest signals</option><option value="volume_ratio">Sort: volume multiple</option><option value="change_pct">Sort: daily change</option><option value="ath_distance_pct">Sort: closest to ATH</option></select>
     <button id="refresh">Refresh</button>
   </section>
@@ -48,7 +48,7 @@
     <div class="footnote" id="coverage-note">Waiting for market data.</div>
   </section>
   <section class="history-status"><span class="pulse"></span><span id="historyText">Historical baselines not loaded yet.</span></section>
-  <footer>Scanner only. No orders are placed. The screener uses the highest daily high in its available five-year data. This is a five-year high, not a verified lifetime ATH. Historical baselines load progressively after connection.</footer>
+  <footer>Scanner only. No orders are placed. The internal signal uses the highest daily high in the available five-year data, not a verified lifetime ATH. For full-history reference, Strota publishes split/bonus-adjusted record closing highs and uses live LTP during market hours; its screen shows stocks within 5% of that record. This is a separate reference source, not the same as our 3% intraday-high rule. Historical baselines load progressively after connection.</footer>
 </div>
 <script src="/static/app.js?v=3"></script>
 </body>
