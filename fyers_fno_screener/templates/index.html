@@ -44,11 +44,11 @@
     <div class="table-wrap">
       <table><thead><tr><th>Stock / signals</th><th>LTP</th><th>Chg %</th><th>Vol ×</th><th>Day volume</th><th>PDH</th><th>5Y ATH gap</th></tr></thead><tbody id="rows"><tr><td colspan="7" class="empty">Connect {{ broker_name }} to start the scan.</td></tr></tbody></table>
     </div>
-    <div id="mobileRows" class="mobile-rows"><div class="empty">Connect FYERS to start the scan.</div></div>
+    <div id="mobileRows" class="mobile-rows"><div class="empty">Connect {{ broker_name }} to start the scan.</div></div>
     <div class="footnote" id="coverage-note">Waiting for market data.</div>
   </section>
   <section class="history-status"><span class="pulse"></span><span id="historyText">Historical baselines not loaded yet.</span></section>
-  <footer>Scanner only. No orders are placed. FYERS Standard provides up to five years of daily history; therefore ATH here means the highest high in the available five-year history, not guaranteed lifetime ATH. Historical baselines load progressively after connection.</footer>
+  <footer>Scanner only. No orders are placed. The screener uses the highest daily high in its available five-year data. This is a five-year high, not a verified lifetime ATH. Historical baselines load progressively after connection.</footer>
 </div>
 <script src="/static/app.js"></script>
 </body>
