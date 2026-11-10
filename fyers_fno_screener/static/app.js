@@ -53,7 +53,9 @@ async function refresh() {
     $('momentumCount').textContent = fmt(data.momentum,0);
     $('athCount').textContent = fmt(data.near_ath,0);
     $('feed').textContent = `Updated ${new Date(data.updated_at).toLocaleTimeString('en-IN')}`;
-    $('coverage-note').textContent = `${data.matched} unique matches from ${data.coverage}/${data.universe} F&O stocks. One row per stock; overlapping signals are grouped together.`;
+    $('coverage-note').textContent = data.coverage > 0 && data.quote_volume_nonzero === 0
+      ? `${data.matched} matches from `${data.coverage} quotes. Warning: Kite returned zero day-volume for all quotes; volume-based signals are not reliable yet.`
+      : `${data.matched} matches from `${data.coverage}/`${data.universe} F&O stocks. Non-zero quote volumes: `${data.quote_volume_nonzero}.`;
     $('historyText').textContent = data.history_running ? `Building 20-session volume baselines and 5-year highs: ${data.history_ready}/${data.universe} stocks ready. Matches will populate as data arrives.` : `Historical baselines ready for ${data.history_ready}/${data.universe} stocks.`;
     $('subhead').textContent = `${data.matched} matching stocks · ${data.market_time} · auto-refresh every 20 seconds`;
     render();
