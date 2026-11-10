@@ -72,7 +72,6 @@ tbody tr:hover{background:#18283a}
 .history-status+.footnote{padding-left:0}
 
 @media(min-width:1200px){
-  .table-wrap{max-height:calc(100vh - 370px)}
   th,td{padding-top:4px;padding-bottom:4px}
 }
 @media(max-width:900px){
