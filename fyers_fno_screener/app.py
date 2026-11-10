@@ -165,66 +165,128 @@ def broker_get(path, params=None, priority=False):
 
 
 
-def get_symbol_universe():
-    """Build a validated NSE cash-equity universe from the current NSE F&O master."""
-    fo_url = 'https://public.fyers.in/sym_details/NSE_FO.csv'
-    cm_url = 'https://public.fyers.in/sym_details/NSE_CM.csv'
-    fo_response = requests.get(fo_url, timeout=30)
-    fo_response.raise_for_status()
-    cm_response = requests.get(cm_url, timeout=30)
-    cm_response.raise_for_status()
+def _normalise_symbol(name):
+    name = (name or '').strip().upper()
+    return f'NSE:{name}-EQ' if name else ''
 
+
+def get_symbol_universe():
+    """Return the unique stock F&O underlyings in a broker-neutral NSE:SYMBOL-EQ format."""
+    if BROKER_PROVIDER == 'zerodha':
+        response = requests.get(KITE_ROOT + '/instruments', headers=kite_headers(), timeout=60)
+        response.raise_for_status()
+        rows = list(csv.DictReader(io.StringIO(response.text)))
+        cash_rows = [
+            row for row in rows
+            if row.get('exchange') == 'NSE'
+            and row.get('segment') == 'NSE'
+            and row.get('instrument_type') == 'EQ'
+        ]
+        cash_by_name = {}
+        cash_symbols = set()
+        for row in cash_rows:
+            symbol = row.get('tradingsymbol', '').strip().upper()
+            name = row.get('name', '').strip().upper()
+            if symbol:
+                cash_symbols.add(symbol)
+                if name:
+                    cash_by_name[name] = symbol
+        # Some instrument-master rows have a blank company name. Fall back to
+        # matching the longest NSE cash ticker at the start of the futures symbol.
+        sorted_cash = sorted(cash_symbols, key=len, reverse=True)
+        underlyings = set()
+        for row in rows:
+            if row.get('exchange') != 'NFO' or row.get('segment') != 'NFO-FUT' or row.get('instrument_type') != 'FUT':
+                continue
+            name = row.get('name', '').strip().upper()
+            symbol = cash_by_name.get(name)
+            if not symbol:
+                future_symbol = row.get('tradingsymbol', '').strip().upper()
+                symbol = next((candidate for candidate in sorted_cash if future_symbol.startswith(candidate)), None)
+            if symbol and symbol not in INDEX_NAMES:
+                underlyings.add(symbol)
+
+        token_map = {
+            row['tradingsymbol'].strip().upper(): int(row['instrument_token'])
+            for row in cash_rows
+            if row.get('tradingsymbol') and row.get('instrument_token')
+        }
+        with lock:
+            cache['instrument_tokens'] = {
+                _normalise_symbol(symbol): token_map[symbol]
+                for symbol in underlyings if symbol in token_map
+            }
+        return sorted(_normalise_symbol(symbol) for symbol in underlyings if symbol in token_map)
+
+    # FYERS instrument masters are public CSVs. Keep the same canonical
+    # broker-neutral symbol shape used by the rest of the scanner.
+    fo_response = requests.get('https://public.fyers.in/sym_details/NSE_FO.csv', timeout=30)
+    fo_response.raise_for_status()
+    cm_response = requests.get('https://public.fyers.in/sym_details/NSE_CM.csv', timeout=30)
+    cm_response.raise_for_status()
     fo_rows = list(csv.reader(io.StringIO(fo_response.text)))
     cm_rows = list(csv.reader(io.StringIO(cm_response.text)))
     if not fo_rows or not cm_rows:
         return []
-
-    def column_index(header, phrase, fallback):
-        return next((i for i, value in enumerate(header) if phrase in value), fallback)
-
     fo_header = [cell.strip().lower() for cell in fo_rows[0]]
     cm_header = [cell.strip().lower() for cell in cm_rows[0]]
     fo_has_header = any('underlying symbol' in cell for cell in fo_header)
     cm_has_header = any('symbol ticker' in cell for cell in cm_header)
-
     fo_data = fo_rows[1:] if fo_has_header else fo_rows
     cm_data = cm_rows[1:] if cm_has_header else cm_rows
-    underlying_idx = column_index(fo_header, 'underlying symbol', 13) if fo_has_header else 13
-    ticker_idx = column_index(cm_header, 'symbol ticker', 9) if cm_has_header else 9
-
-    # Intersect derivative underlyings with actual NSE cash-equity tickers.
-    # This prevents index derivatives and malformed symbols entering the scanner.
+    underlying_idx = next((i for i, h in enumerate(fo_header) if 'underlying symbol' in h), 13) if fo_has_header else 13
+    ticker_idx = next((i for i, h in enumerate(cm_header) if 'symbol ticker' in h), 9) if cm_has_header else 9
     cash_symbols = {
         row[ticker_idx].strip().upper()
         for row in cm_data
-        if len(row) > ticker_idx
-        and row[ticker_idx].strip().upper().startswith('NSE:')
+        if len(row) > ticker_idx and row[ticker_idx].strip().upper().startswith('NSE:')
         and row[ticker_idx].strip().upper().endswith('-EQ')
     }
-
-    underlyings = set()
+    result = set()
     for row in fo_data:
         if len(row) <= underlying_idx:
             continue
         name = row[underlying_idx].strip().upper()
-        if not name or name in INDEX_NAMES:
-            continue
-        if all(ch.isalnum() or ch in '&-_' for ch in name):
-            candidate = f'NSE:{name}-EQ'
-            if candidate in cash_symbols:
-                underlyings.add(candidate)
-    return sorted(underlyings)
+        candidate = _normalise_symbol(name)
+        if name and name not in INDEX_NAMES and candidate in cash_symbols:
+            result.add(candidate)
+    return sorted(result)
+
+
+def _normalise_kite_quote(symbol, item):
+    ohlc = item.get('ohlc') or {}
+    close = ohlc.get('close')
+    net_change = item.get('net_change')
+    change_pct = (float(net_change) / float(close) * 100.0) if close and net_change is not None else None
+    return {
+        'lp': item.get('last_price'),
+        'prev_close_price': close,
+        'chp': change_pct,
+        'volume': item.get('volume'),
+        'high_price': ohlc.get('high'),
+    }
 
 
 def refresh_quotes(symbols):
-    """Fetch the entire F&O stock universe in FYERS Standard 50-symbol batches."""
+    """Fetch quote snapshots and normalise them into the common screener schema."""
     result = {}
-    for start in range(0, len(symbols), 50):
-        batch = symbols[start:start + 50]
-        payload = fyers_get('/data/quotes', {'symbols': ','.join(batch)}, priority=True)
-        for item in payload.get('d', []):
-            if item.get('s') == 'ok':
-                result[item.get('n', '')] = item.get('v', {})
+    if BROKER_PROVIDER == 'zerodha':
+        # Kite full-quote endpoint allows up to 500 instruments per request.
+        kite_symbols = [symbol.replace('-EQ', '') for symbol in symbols]
+        for start in range(0, len(kite_symbols), 500):
+            batch = kite_symbols[start:start + 500]
+            params = [('i', symbol) for symbol in batch]
+            payload = broker_get('/quote', params=params, priority=True)
+            for key, item in (payload.get('data') or {}).items():
+                canonical = key + '-EQ'
+                result[canonical] = _normalise_kite_quote(canonical, item)
+    else:
+        for start in range(0, len(symbols), 50):
+            batch = symbols[start:start + 50]
+            payload = broker_get('/quotes', {'symbols': ','.join(batch)}, priority=True)
+            for item in payload.get('d', []):
+                if item.get('s') == 'ok':
+                    result[item.get('n', '')] = item.get('v', {})
     with lock:
         cache['quotes'].update(result)
         cache['last_scan'] = time.time()
@@ -233,8 +295,40 @@ def refresh_quotes(symbols):
     return result
 
 
+def _kite_timestamp_epoch(value):
+    try:
+        stamp = datetime.strptime(value, '%Y-%m-%dT%H:%M:%S%z')
+    except ValueError:
+        try:
+            stamp = datetime.fromisoformat(value)
+        except ValueError:
+            stamp = datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=IST)
+    return int(stamp.timestamp())
+
+
 def fetch_history(symbol, resolution, start_date, end_date):
-    payload = fyers_get('/data/history', {
+    if BROKER_PROVIDER == 'zerodha':
+        with lock:
+            instrument_token = cache['instrument_tokens'].get(symbol)
+        if not instrument_token:
+            raise RuntimeError(f'Kite instrument token unavailable for {symbol}. Refresh the F&O instrument master.')
+        interval = {'5': '5minute', 'D': 'day'}.get(str(resolution), str(resolution))
+        params = {
+            'from': f'{start_date} 00:00:00',
+            'to': f'{end_date} 23:59:59',
+            'oi': 0,
+        }
+        payload = broker_get(f'/instruments/historical/{instrument_token}/{interval}', params=params)
+        candles = ((payload.get('data') or {}).get('candles') or [])
+        normalised = []
+        for candle in candles:
+            if len(candle) >= 6:
+                normalised.append([_kite_timestamp_epoch(str(candle[0]))] + list(candle[1:6]))
+        return normalised
+
+    payload = broker_get('/history', {
         'symbol': symbol,
         'resolution': resolution,
         'date_format': '1',
@@ -444,41 +538,78 @@ def home():
     return render_template('index.html')
 
 
+@app.route('/connect-broker')
 @app.route('/connect-fyers')
-def connect_fyers():
+def connect_broker():
+    """Start OAuth for the selected broker; the browser never receives the app secret."""
     if not APP_ID or not APP_SECRET or not REDIRECT_URI:
-        return 'Set FYERS_APP_ID, FYERS_APP_SECRET and FYERS_REDIRECT_URI in server environment.', 400
+        return f'Set the {BROKER_PROVIDER.upper()} API key, API secret and redirect URL in the server environment.', 400
     state = secrets.token_urlsafe(24)
-    session['fyers_oauth_state'] = state
-    params = {'client_id': APP_ID, 'redirect_uri': REDIRECT_URI, 'response_type': 'code', 'state': state}
+    session['broker_oauth_state'] = state
+    if BROKER_PROVIDER == 'zerodha':
+        params = {
+            'v': '3',
+            'api_key': KITE_API_KEY,
+            'redirect_params': urlencode({'state': state}),
+        }
+        return redirect('https://kite.zerodha.com/connect/login?' + urlencode(params))
+    params = {'client_id': FYERS_APP_ID, 'redirect_uri': FYERS_REDIRECT_URI, 'response_type': 'code', 'state': state}
     return redirect('https://api-t1.fyers.in/api/v3/generate-authcode?' + urlencode(params))
 
 
 @app.route('/callback')
 def callback():
     global TOKEN
-    code = request.args.get('auth_code')
+    expected = session.pop('broker_oauth_state', None)
     state = request.args.get('state')
-    expected = session.pop('fyers_oauth_state', None)
-    if not code or not expected or not secrets.compare_digest(state or '', expected):
-        return 'FYERS login failed: missing auth_code or invalid state. Return to the private dashboard and reconnect.', 400
-    app_hash = hashlib.sha256(f'{APP_ID}:{APP_SECRET}'.encode()).hexdigest()
-    response = requests.post(API_ROOT + '/api/v3/validate-authcode', json={
-        'grant_type': 'authorization_code', 'appIdHash': app_hash, 'code': code
-    }, timeout=25)
-    data = response.json()
-    if data.get('s') != 'ok' or not data.get('access_token'):
-        return f"Token exchange failed: {data.get('message', 'Unknown error')}", 400
-    TOKEN = data['access_token']
+    if not expected or not secrets.compare_digest(state or '', expected):
+        return 'Broker login failed: missing or invalid OAuth state. Return to the private dashboard and reconnect.', 400
+
+    if BROKER_PROVIDER == 'zerodha':
+        request_token = request.args.get('request_token')
+        if not request_token:
+            return 'Zerodha did not return a request_token. Restart the broker login.', 400
+        checksum = hashlib.sha256(f'{KITE_API_KEY}{request_token}{KITE_API_SECRET}'.encode()).hexdigest()
+        response = requests.post(
+            KITE_ROOT + '/session/token',
+            data={'api_key': KITE_API_KEY, 'request_token': request_token, 'checksum': checksum},
+            headers={'X-Kite-Version': '3'},
+            timeout=25,
+        )
+        data = response.json()
+        if response.status_code >= 400 or data.get('status') != 'success':
+            return f"Zerodha token exchange failed: {data.get('message', 'Unknown error')}", 400
+        TOKEN = (data.get('data') or {}).get('access_token', '')
+        if not TOKEN:
+            return 'Zerodha did not return an access token.', 400
+    else:
+        auth_code = request.args.get('auth_code')
+        if not auth_code:
+            return 'FYERS did not return an auth_code. Restart broker login.', 400
+        app_hash = hashlib.sha256(f'{FYERS_APP_ID}:{FYERS_APP_SECRET}'.encode()).hexdigest()
+        response = requests.post(FYERS_ROOT + '/api/v3/validate-authcode', json={
+            'grant_type': 'authorization_code', 'appIdHash': app_hash, 'code': auth_code
+        }, timeout=25)
+        data = response.json()
+        if response.status_code >= 400 or data.get('s') != 'ok' or not data.get('access_token'):
+            return f"FYERS token exchange failed: {data.get('message', 'Unknown error')}", 400
+        TOKEN = data['access_token']
+
     cache['connected'] = True
+    cache['symbols'] = []
+    cache['quotes'] = {}
+    cache['intraday'] = {}
+    cache['daily'] = {}
+    cache['instrument_tokens'] = {}
     return redirect(url_for('home'))
+
 
 
 @app.route('/api/status')
 def status():
     with lock:
         return jsonify({
-            'connected': bool(APP_ID and TOKEN),
+            'connected': bool(APP_ID and TOKEN),\n            'broker': BROKER_PROVIDER,
             'symbols_loaded': len(cache['symbols']),
             'last_update': cache['last_scan'],
             'error': cache['last_error'],
@@ -504,11 +635,11 @@ def universe():
 @app.route('/api/scan')
 def scan():
     try:
+        if not TOKEN:
+            return jsonify({'error': f'Connect {BROKER_PROVIDER.upper()} to start the live scan.', 'rows': []}), 400
         if not cache['symbols']:
             cache['symbols'] = get_symbol_universe()
         symbols = cache['symbols']
-        if not TOKEN:
-            return jsonify({'error': 'Connect FYERS to start the live scan.', 'rows': [], 'universe': len(symbols)}), 400
         quotes = refresh_quotes(symbols)
         start_history_worker(symbols)
         now = datetime.now(IST)
