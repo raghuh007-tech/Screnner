@@ -482,7 +482,7 @@ def build_scan_row(symbol, quote, now=None):
     if gain_ok:
         signals.append('+2% MOMENTUM')
     if ath_ok:
-        signals.append('NEAR 5Y ATH')
+        signals.append('NEAR 5Y HIGH')
     if not signals:
         return None
 
@@ -671,7 +671,7 @@ def scan():
             'matched': len(rows),
             'pd_breakouts': sum('PDH BREAKOUT' in row['signals'] for row in rows),
             'momentum': sum('+2% MOMENTUM' in row['signals'] for row in rows),
-            'near_ath': sum('NEAR 5Y ATH' in row['signals'] for row in rows),
+            'near_ath': sum('NEAR 5Y HIGH' in row['signals'] for row in rows),
             'history_ready': ready,
             'history_running': history_running,
             'updated_at': now.isoformat(timespec='seconds'),
