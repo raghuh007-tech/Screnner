@@ -9,6 +9,7 @@ import re
 import hashlib
 import secrets
 import threading
+import sqlite3
 from collections import deque
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
@@ -66,6 +67,147 @@ cache = {
     'connected': bool(TOKEN), 'last_quote_count': 0,
 }
 lock = threading.RLock()
+
+# Historical candle cache. Use /var/data on a Render service with a
+# persistent disk; the default local path is only durable for the life of
+# an ephemeral Render instance.
+HISTORY_DB_PATH = os.getenv(
+    'HISTORY_DB_PATH',
+    os.path.join(os.path.dirname(__file__), 'instance', 'history_cache.sqlite3')
+)
+history_db_lock = threading.RLock()
+history_meta = {}
+
+
+def _history_db_connect():
+    folder = os.path.dirname(os.path.abspath(HISTORY_DB_PATH))
+    os.makedirs(folder, exist_ok=True)
+    connection = sqlite3.connect(HISTORY_DB_PATH, timeout=30)
+    connection.execute('PRAGMA busy_timeout=30000')
+    return connection
+
+
+def init_history_store():
+    with history_db_lock:
+        with _history_db_connect() as db:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS candle_cache (
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    candles_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (symbol, timeframe)
+                )
+            """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS history_meta (
+                    symbol TEXT PRIMARY KEY,
+                    intraday_fetch_date TEXT,
+                    daily_fetch_date TEXT,
+                    retry_after TEXT,
+                    last_error TEXT
+                )
+            """)
+            rows = db.execute(
+                "SELECT symbol, timeframe, candles_json FROM candle_cache"
+            ).fetchall()
+            meta_rows = db.execute(
+                "SELECT symbol, intraday_fetch_date, daily_fetch_date, retry_after, last_error FROM history_meta"
+            ).fetchall()
+
+        for symbol, timeframe, candles_json in rows:
+            try:
+                candles = json.loads(candles_json)
+                if timeframe == '5m':
+                    cache['intraday'][symbol] = candles
+                elif timeframe == '1d':
+                    cache['daily'][symbol] = candles
+            except (TypeError, ValueError, json.JSONDecodeError):
+                app.logger.warning('Ignoring invalid cached history for %s (%s)', symbol, timeframe)
+
+        for row in meta_rows:
+            history_meta[row[0]] = {
+                'intraday_fetch_date': row[1],
+                'daily_fetch_date': row[2],
+                'retry_after': row[3],
+                'last_error': row[4],
+            }
+
+
+def save_history(symbol, timeframe, candles, fetched_date=None):
+    fetched_date = fetched_date or datetime.now(IST).date().isoformat()
+    with history_db_lock:
+        with _history_db_connect() as db:
+            db.execute("""
+                INSERT INTO candle_cache(symbol, timeframe, candles_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(symbol, timeframe) DO UPDATE SET
+                    candles_json=excluded.candles_json,
+                    updated_at=excluded.updated_at
+            """, (symbol, timeframe, json.dumps(candles, separators=(',', ':')), datetime.now(IST).isoformat()))
+            if timeframe in {'5m', '1d'}:
+                field = 'intraday_fetch_date' if timeframe == '5m' else 'daily_fetch_date'
+                db.execute(f"""
+                    INSERT INTO history_meta(symbol, {field})
+                    VALUES (?, ?)
+                    ON CONFLICT(symbol) DO UPDATE SET {field}=excluded.{field}
+                """, (symbol, fetched_date))
+    history_meta.setdefault(symbol, {})[
+        'intraday_fetch_date' if timeframe == '5m' else 'daily_fetch_date'
+    ] = fetched_date
+
+
+def update_history_error(symbol, message, cooldown_hours=6):
+    retry_at = (datetime.now(IST) + timedelta(hours=cooldown_hours)).isoformat()
+    with history_db_lock:
+        with _history_db_connect() as db:
+            db.execute("""
+                INSERT INTO history_meta(symbol, retry_after, last_error)
+                VALUES (?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    retry_after=excluded.retry_after,
+                    last_error=excluded.last_error
+            """, (symbol, retry_at, str(message)[:500]))
+    history_meta.setdefault(symbol, {}).update({
+        'retry_after': retry_at,
+        'last_error': str(message)[:500],
+    })
+
+
+def clear_history_retry(symbol):
+    with history_db_lock:
+        with _history_db_connect() as db:
+            db.execute("UPDATE history_meta SET retry_after=NULL, last_error=NULL WHERE symbol=?", (symbol,))
+    history_meta.setdefault(symbol, {}).update({'retry_after': None, 'last_error': None})
+
+
+def merge_candles(old_candles, new_candles):
+    merged = {int(candle[0]): candle for candle in (old_candles or []) if len(candle) >= 6}
+    for candle in new_candles or []:
+        if len(candle) >= 6:
+            merged[int(candle[0])] = candle
+    return [merged[key] for key in sorted(merged)]
+
+
+def history_due(symbol, today=None):
+    today = today or datetime.now(IST).date()
+    meta = history_meta.get(symbol, {})
+    retry_after = meta.get('retry_after')
+    if retry_after:
+        try:
+            if datetime.fromisoformat(retry_after) > datetime.now(IST):
+                return False
+        except ValueError:
+            pass
+    needs_daily = symbol not in cache['daily'] or meta.get('daily_fetch_date') != today.isoformat()
+    needs_intraday = symbol not in cache['intraday'] or meta.get('intraday_fetch_date') != today.isoformat()
+    return needs_daily or needs_intraday
+
+
+try:
+    init_history_store()
+except Exception as history_store_error:
+    app.logger.exception('Historical cache could not be initialised: %s', history_store_error)
 
 # FYERS Standard Data API limits: keep a safety margin below its published quota.
 _api_times = deque()
@@ -354,55 +496,80 @@ def date_chunks(start: date, end: date, days=366):
 
 
 def warm_history_for_symbol(symbol):
-    """Cache 20-session same-time volume baseline and available 5Y daily ATH/PDH."""
+    """Backfill once, then refresh only recent candles once per calendar day."""
     today = datetime.now(IST).date()
-    # Intraday API allows up to 100 calendar days per request. 45 days covers 20 sessions.
-    intraday_start = today - timedelta(days=45)
-    intraday = fetch_history(symbol, '5', intraday_start.isoformat(), today.isoformat())
-    daily_start = today - timedelta(days=5 * 366)
-    daily_candles = []
-    for start, end in date_chunks(daily_start, today - timedelta(days=1), 366):
-        daily_candles.extend(fetch_history(symbol, 'D', start.isoformat(), end.isoformat()))
-    with lock:
-        cache['intraday'][symbol] = intraday
-        cache['daily'][symbol] = daily_candles
+    meta = history_meta.get(symbol, {})
 
+    # Full five-year daily backfill only if this symbol has no saved daily history.
+    with lock:
+        daily_existing = cache['daily'].get(symbol, [])
+        intraday_existing = cache['intraday'].get(symbol, [])
+
+    if not daily_existing:
+        daily_start = today - timedelta(days=5 * 366)
+        daily_candles = []
+        for start, end in date_chunks(daily_start, today - timedelta(days=1), 366):
+            daily_candles.extend(fetch_history(symbol, 'D', start.isoformat(), end.isoformat()))
+        daily_candles = merge_candles([], daily_candles)
+    elif meta.get('daily_fetch_date') != today.isoformat():
+        # Refresh only the latest 10 calendar days and merge them into the
+        # stored five-year history. Do not download the full five years again.
+        recent_start = today - timedelta(days=10)
+        recent = fetch_history(symbol, 'D', recent_start.isoformat(), today.isoformat())
+        daily_candles = merge_candles(daily_existing, recent)
+    else:
+        daily_candles = daily_existing
+
+    if daily_candles is not daily_existing:
+        with lock:
+            cache['daily'][symbol] = daily_candles
+        save_history(symbol, '1d', daily_candles, today.isoformat())
+
+    # The 20-session volume comparison needs a rolling 45-day 5-minute set.
+    # Request it once per day, not every 20-second scanner refresh.
+    if not intraday_existing or meta.get('intraday_fetch_date') != today.isoformat():
+        intraday_start = today - timedelta(days=45)
+        intraday = fetch_history(symbol, '5', intraday_start.isoformat(), today.isoformat())
+        with lock:
+            cache['intraday'][symbol] = intraday
+        save_history(symbol, '5m', intraday, today.isoformat())
+
+    clear_history_retry(symbol)
 
 def history_worker(symbols):
     with lock:
         cache['history_running'] = True
         cache['history_total'] = len(symbols)
         cache['history_done'] = 0
-        cache['history_message'] = 'Building historical baselines. Results will populate progressively.'
+        cache['history_message'] = 'Loading saved history; fetching only missing or due candles.'
     try:
         for symbol in symbols:
-            with lock:
-                have_intraday = symbol in cache['intraday']
-                have_daily = symbol in cache['daily']
-            if not have_intraday or not have_daily:
-                try:
-                    warm_history_for_symbol(symbol)
-                except Exception as exc:
-                    with lock:
-                        cache['last_error'] = f'{symbol}: {exc}'
+            try:
+                warm_history_for_symbol(symbol)
+            except Exception as exc:
+                update_history_error(symbol, exc)
+                with lock:
+                    cache['last_error'] = f'{symbol}: {exc}'
             with lock:
                 cache['history_done'] += 1
-                cache['history_message'] = f"Historical data ready for {cache['history_done']} of {cache['history_total']} stocks"
+                cache['history_message'] = (
+                    f"History checked for {cache['history_done']} of {cache['history_total']} stocks"
+                )
     finally:
         with lock:
             cache['history_running'] = False
-            cache['history_message'] = 'Historical baseline ready' if cache['history_done'] == cache['history_total'] else cache['history_message']
+            cache['history_message'] = 'Historical cache up to date' if cache['history_done'] == cache['history_total'] else cache['history_message']
 
 
 def start_history_worker(symbols):
     with lock:
         if cache['history_running']:
             return
-        # Refresh history once per process/day. Keep the already loaded data on manual quote refreshes.
-        missing = [s for s in symbols if s not in cache['intraday'] or s not in cache['daily']]
-        if not missing:
+        today = datetime.now(IST).date()
+        due = [symbol for symbol in symbols if history_due(symbol, today)]
+        if not due:
             return
-        thread = threading.Thread(target=history_worker, args=(missing,), daemon=True)
+        thread = threading.Thread(target=history_worker, args=(due,), daemon=True)
         thread.start()
 
 
@@ -625,6 +792,9 @@ def status():
             'history_total': cache['history_total'],
             'history_running': cache['history_running'],
             'history_message': cache['history_message'],
+            'history_cache_path': HISTORY_DB_PATH,
+            'history_cache_symbols': len(set(cache['daily']) & set(cache['intraday'])),
+            'history_due_today': sum(1 for symbol in cache['symbols'] if history_due(symbol)),
             'quote_count': cache['last_quote_count'],
         })
 
