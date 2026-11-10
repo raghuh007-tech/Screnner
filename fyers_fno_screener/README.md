@@ -14,7 +14,7 @@ A stock appears once. All qualifying signal labels are grouped in its row/card.
 
 - F&O universe: unique stock underlyings parsed from FYERS `NSE_FO.csv`; index underlyings are excluded.
 - Quotes: FYERS `/data/quotes` in batches of up to 50 symbols, refreshed every 20 seconds.
-- Same-time volume: 5-minute historical candles are grouped by trading date. Each past session's cumulative volume is summed through the same 5-minute time bucket. The average of the last 20 available sessions is compared with the current day's cumulative quote volume.
+- Same-time volume: 5-minute historical candles are grouped by trading date. Each past session's cumulative volume is summed through the last completed 5-minute bucket, avoiding comparison with an unfinished live candle. The average of the last 20 available sessions is compared with the current day's cumulative quote volume.
 - Previous day high and available-history high: daily candles. Standard daily history is five years; FYERS allows up to 366 days per history request, so the high history is assembled in chunks.
 - Historical baselines load in the background and populate progressively. A full initial history warm-up can take a while due to FYERS Standard's published 50 Data API requests/minute and 5,000/day limits. The app throttles requests below that ceiling.
 - Historical data is held in process memory. Restarting the server causes a new warm-up.
@@ -30,7 +30,7 @@ Required environment variables:
 - `COOKIE_SECURE=true` when HTTPS is enabled.
 - `FYERS_APP_ID`, `FYERS_APP_SECRET`, `FYERS_REDIRECT_URI`.
 
-Set the FYERS API app redirect URI to exactly the deployed `https://your-domain/callback` URL. Enable Market Data permission for Quotes and Historical Data. The user first unlocks the private dashboard, then selects **Connect FYERS** and completes FYERS OAuth. The app stores the resulting token in process memory; FYERS tokens expire and may need reconnection.
+Set the FYERS API app redirect URI to exactly the deployed `https://your-domain/callback` URL. Enable Market Data permission for Quotes and Historical Data. The user first unlocks the private dashboard, then selects **Connect FYERS** and completes FYERS OAuth. The app stores the resulting token in process memory, so a server restart requires reconnecting. FYERS access tokens also expire daily at 6:30 AM IST, so reconnect after expiry.
 
 Start command:
 
