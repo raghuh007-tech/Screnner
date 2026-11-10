@@ -98,33 +98,54 @@ def fyers_get(path, params=None, priority=False):
 
 
 def get_symbol_universe():
-    """Unique cash-equity symbols whose underlyings exist in the NSE F&O master."""
-    url = 'https://public.fyers.in/sym_details/NSE_FO.csv'
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    rows = list(csv.reader(io.StringIO(response.text)))
-    if not rows:
+    """Build a validated NSE cash-equity universe from the current NSE F&O master."""
+    fo_url = 'https://public.fyers.in/sym_details/NSE_FO.csv'
+    cm_url = 'https://public.fyers.in/sym_details/NSE_CM.csv'
+    fo_response = requests.get(fo_url, timeout=30)
+    fo_response.raise_for_status()
+    cm_response = requests.get(cm_url, timeout=30)
+    cm_response.raise_for_status()
+
+    fo_rows = list(csv.reader(io.StringIO(fo_response.text)))
+    cm_rows = list(csv.reader(io.StringIO(cm_response.text)))
+    if not fo_rows or not cm_rows:
         return []
-    first = [cell.strip().lower() for cell in rows[0]]
-    has_header = any('underlying symbol' in cell for cell in first)
-    if has_header:
-        headers, data = first, rows[1:]
-        def find_col(term):
-            return next((i for i, h in enumerate(headers) if term in h), None)
-        underlying_idx = find_col('underlying symbol')
-    else:
-        data, underlying_idx = rows, 13
+
+    def column_index(header, phrase, fallback):
+        return next((i for i, value in enumerate(header) if phrase in value), fallback)
+
+    fo_header = [cell.strip().lower() for cell in fo_rows[0]]
+    cm_header = [cell.strip().lower() for cell in cm_rows[0]]
+    fo_has_header = any('underlying symbol' in cell for cell in fo_header)
+    cm_has_header = any('symbol ticker' in cell for cell in cm_header)
+
+    fo_data = fo_rows[1:] if fo_has_header else fo_rows
+    cm_data = cm_rows[1:] if cm_has_header else cm_rows
+    underlying_idx = column_index(fo_header, 'underlying symbol', 13) if fo_has_header else 13
+    ticker_idx = column_index(cm_header, 'symbol ticker', 9) if cm_has_header else 9
+
+    # Intersect derivative underlyings with actual NSE cash-equity tickers.
+    # This prevents index derivatives and malformed symbols entering the scanner.
+    cash_symbols = {
+        row[ticker_idx].strip().upper()
+        for row in cm_data
+        if len(row) > ticker_idx
+        and row[ticker_idx].strip().upper().startswith('NSE:')
+        and row[ticker_idx].strip().upper().endswith('-EQ')
+    }
+
     underlyings = set()
-    for row in data:
-        if underlying_idx is None or len(row) <= underlying_idx:
+    for row in fo_data:
+        if len(row) <= underlying_idx:
             continue
         name = row[underlying_idx].strip().upper()
         if not name or name in INDEX_NAMES:
             continue
-        # Avoid malformed/index values; preserve valid NSE symbols such as M&M.
         if all(ch.isalnum() or ch in '&-_' for ch in name):
-            underlyings.add(name)
-    return sorted(f'NSE:{name}-EQ' for name in underlyings)
+            candidate = f'NSE:{name}-EQ'
+            if candidate in cash_symbols:
+                underlyings.add(candidate)
+    return sorted(underlyings)
 
 
 def refresh_quotes(symbols):
@@ -224,6 +245,8 @@ def volume_ratio_for_time(candles, now=None):
     today = now.date()
     # Include bars whose start time is at or before the current 5-minute bucket.
     current_bucket_minute = (now.hour * 60 + now.minute) // 5 * 5
+    # The live quote includes a partial current 5-minute bucket. Compare only
+    # with completed historical buckets to avoid overstating the baseline.
     sessions = {}
     for candle in candles:
         if len(candle) < 6:
@@ -238,7 +261,7 @@ def volume_ratio_for_time(candles, now=None):
         return None, None, len(selected_dates)
     cumulative = []
     for session_date in selected_dates:
-        total = sum(vol for minute, vol in sessions[session_date] if minute <= current_bucket_minute)
+        total = sum(vol for minute, vol in sessions[session_date] if minute < current_bucket_minute)
         cumulative.append(total)
     average = sum(cumulative) / len(cumulative) if cumulative else 0
     return average, cumulative[-1] if cumulative else None, len(cumulative)
