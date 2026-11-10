@@ -76,3 +76,16 @@ Open the deployed HTTPS URL in Safari, unlock the dashboard, connect the selecte
 - Keep the repository private and do not commit `.env`.
 - Never share API keys, API secrets, access tokens, or the dashboard password in chat.
 - Render Free services may sleep after inactivity. That can interrupt market monitoring and clear in-memory history.
+
+
+## Historical cache and API-call control
+
+Historical candles are stored in SQLite by symbol and timeframe.
+
+- First run: fetches the five-year daily history once per stock (in one-year request chunks) and the last 45 calendar days of 5-minute candles once.
+- Later trading days: fetches only the most recent 10 calendar days of daily candles and the 45-day intraday window, then merges them into the stored records. It does not repeat the five-year backfill.
+- Within the same day: the scanner reuses cached history; the 20-second quote refresh does not trigger historical downloads.
+- Failed history requests are put on a six-hour retry cooldown.
+- The dashboard status endpoint reports how many symbols have both daily and intraday history cached.
+
+**Render storage limitation:** the current Free web service has an ephemeral filesystem. Render deletes local SQLite files when the service spins down, restarts, or redeploys. To preserve the cache across those events, use a paid Render web-service instance and attach a persistent disk mounted at `/var/data`, then set `HISTORY_DB_PATH=/var/data/history_cache.sqlite3`. Do not attach a disk to the current Free instance; Render does not support persistent disks on Free web services. A Free Render Postgres database is not a long-term substitute because it expires after 30 days.
