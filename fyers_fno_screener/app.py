@@ -535,7 +535,7 @@ def logout():
 
 @app.route('/')
 def home():
-    return render_template('index.html')
+    return render_template('index.html', broker_name=('Zerodha Kite' if BROKER_PROVIDER == 'zerodha' else 'FYERS'))
 
 
 @app.route('/connect-broker')
