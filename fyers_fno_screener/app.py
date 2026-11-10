@@ -256,8 +256,15 @@ def get_symbol_universe():
 def _normalise_kite_quote(symbol, item):
     ohlc = item.get('ohlc') or {}
     close = ohlc.get('close')
+    last_price = item.get('last_price')
     net_change = item.get('net_change')
-    change_pct = (float(net_change) / float(close) * 100.0) if close and net_change is not None else None
+    change_pct = None
+    if close and last_price is not None:
+        # Derive percentage from the actual LTP and prior close. This also
+        # avoids displaying a false 0% when the API's net_change is empty/zero.
+        change_pct = (float(last_price) / float(close) - 1.0) * 100.0
+    elif close and net_change is not None:
+        change_pct = float(net_change) / float(close) * 100.0
     return {
         'lp': item.get('last_price'),
         'prev_close_price': close,
@@ -659,6 +666,7 @@ def scan():
         return jsonify({
             'rows': rows,
             'coverage': len(quotes),
+            'quote_volume_nonzero': sum(1 for quote in quotes.values() if quote.get('volume') not in (None, 0)),
             'universe': len(symbols),
             'matched': len(rows),
             'pd_breakouts': sum('PDH BREAKOUT' in row['signals'] for row in rows),
