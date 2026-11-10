@@ -609,7 +609,8 @@ def callback():
 def status():
     with lock:
         return jsonify({
-            'connected': bool(APP_ID and TOKEN),\n            'broker': BROKER_PROVIDER,
+            'connected': bool(APP_ID and TOKEN),
+            'broker': BROKER_PROVIDER,
             'symbols_loaded': len(cache['symbols']),
             'last_update': cache['last_scan'],
             'error': cache['last_error'],
