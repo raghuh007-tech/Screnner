@@ -1,52 +1,78 @@
-# FYERS F&O Live Screener — Mobile V1.1
+# NSE F&O Live Screener
 
-A private, mobile-first web dashboard for NSE stock F&O underlyings. It combines three scanners into one duplicate-free list and does not place orders.
+A private, mobile-first dashboard for NSE stock F&O underlyings. It combines three scanners into one duplicate-free list. It only reads market data and does not place orders.
 
-## Confirmed screening rules
+## Screening rules
 
-1. **PDH breakout:** LTP > previous completed trading day's high AND current cumulative volume >= 3x the average cumulative volume at the same time over the previous 20 trading sessions.
-2. **Daily momentum:** FYERS quote percentage change >= +2.00% from previous close AND the same >= 3x volume condition.
-3. **Near ATH:** LTP is within 3.00% below the highest daily high available in FYERS history. On Standard, FYERS documents five years of daily history, so this is a **5-year available-history high**, not guaranteed lifetime ATH. Prime provides longer daily history, but still should not be described as lifetime ATH without checking listing history.
+1. **PDH breakout:** LTP above the previous completed trading day's high, with volume at least 3× the average cumulative volume at the same time over the previous 20 sessions.
+2. **Daily momentum:** Daily change of at least +2.00% from the previous close, with the same 3× volume condition.
+3. **Near 5-year high:** LTP within 3.00% below the highest daily high in the available five-year data. This is not guaranteed to be a lifetime all-time high.
 
-A stock appears once. All qualifying signal labels are grouped in its row/card.
+A stock appears once. All matching signals are grouped in its row/card.
 
-## Data method and limits
+## Data method
 
-- F&O universe: unique stock underlyings parsed from FYERS `NSE_FO.csv`; index underlyings are excluded.
-- Quotes: FYERS `/data/quotes` in batches of up to 50 symbols, refreshed every 20 seconds.
-- Same-time volume: 5-minute historical candles are grouped by trading date. Each past session's cumulative volume is summed through the last completed 5-minute bucket, avoiding comparison with an unfinished live candle. The average of the last 20 available sessions is compared with the current day's cumulative quote volume.
-- Previous day high and available-history high: daily candles. Standard daily history is five years; FYERS allows up to 366 days per history request, so the high history is assembled in chunks.
-- Historical baselines load in the background and populate progressively. A full initial history warm-up can take a while due to FYERS Standard's published 50 Data API requests/minute and 5,000/day limits. The app throttles requests below that ceiling.
-- Historical data is held in process memory. Restarting the server causes a new warm-up.
-- This V1 uses REST quote snapshots every 20 seconds, not tick-by-tick WebSocket data. It is a live snapshot scanner, not a tick-level feed.
+- The universe is the unique stock underlyings in NSE F&O. Index underlyings are excluded.
+- Provider-specific instrument masters are translated into a common internal NSE cash-symbol format.
+- Current volume is compared with average cumulative volume at the same time over the previous 20 trading sessions, based on 5-minute candles.
+- Previous-day high and the available five-year high are calculated from daily candles.
+- Historical baselines load in the background and populate progressively.
+- Market quotes are refreshed as snapshots every 20 seconds. This is not a tick-by-tick WebSocket feed.
+- Historical data is kept in process memory. A server restart clears it and triggers a fresh warm-up.
 
-## Private deployment
+## Broker selection
 
-Deploy this Flask app to a host that supports a persistent Python web process and HTTPS (for example, Render or another managed host). Set the environment variables from `.env.example` in the hosting dashboard. Do not upload `.env` to source control.
+Set `BROKER_PROVIDER` to exactly one of:
 
-Required environment variables:
+- `zerodha` — first provider for the November 2026 rollout.
+- `fyers` — planned provider for the later switch.
+
+The dashboard, symbols, scan calculations and display remain the same. Switching provider requires adding the second provider's credentials in the host environment, changing `BROKER_PROVIDER`, and redeploying. Do not put API secrets or access tokens in GitHub.
+
+### Zerodha Kite
+
+Set these Render environment variables:
+
+- `BROKER_PROVIDER=zerodha`
+- `KITE_API_KEY`
+- `KITE_API_SECRET`
+- `KITE_REDIRECT_URI=https://fyers-fno-live-screener.onrender.com/callback`
+
+Create a Kite Connect app and register that exact HTTPS redirect URL. Then open the private dashboard and choose **Connect Zerodha Kite**. The server completes the request-token exchange; the API secret is never sent to the browser.
+
+**Important:** Zerodha's free Personal API tier does not include live or historical market data. The Kite Connect paid plan is required for this screener's quote and candle data. Kite access tokens expire daily, so reconnect after expiry.
+
+### FYERS (later provider)
+
+Set these Render environment variables when switching:
+
+- `BROKER_PROVIDER=fyers`
+- `FYERS_APP_ID`
+- `FYERS_APP_SECRET`
+- `FYERS_REDIRECT_URI=https://fyers-fno-live-screener.onrender.com/callback`
+
+Register the same redirect URL in the FYERS API app. The dashboard then uses the same common scanner calculations with FYERS quotes and candles.
+
+## Common environment variables
+
 - `SCREENER_PASSWORD`: private dashboard password.
-- `FLASK_SECRET_KEY`: long random secret for signed sessions.
-- `COOKIE_SECURE=true` when HTTPS is enabled.
-- `FYERS_APP_ID`, `FYERS_APP_SECRET`, `FYERS_REDIRECT_URI`.
+- `FLASK_SECRET_KEY`: long random session-signing secret.
+- `COOKIE_SECURE=true`: enable secure cookies on HTTPS.
+- `KITE_ACCESS_TOKEN` / `FYERS_ACCESS_TOKEN`: optional initial token values; normally leave blank and authenticate from the dashboard.
 
-Set the FYERS API app redirect URI to exactly the deployed `https://your-domain/callback` URL. Enable Market Data permission for Quotes and Historical Data. The user first unlocks the private dashboard, then selects **Connect FYERS** and completes FYERS OAuth. The app stores the resulting token in process memory, so a server restart requires reconnecting. FYERS access tokens also expire daily at 6:30 AM IST, so reconnect after expiry.
-
-Start command:
+Use one Gunicorn worker because the current quote and history caches are in process memory:
 
 ```bash
 gunicorn --workers 1 --threads 8 --bind 0.0.0.0:$PORT app:app
 ```
 
-Use one worker because quote and historical caches are in process memory. Multiple workers would have separate caches and duplicate API calls. Add persistent storage/database and a shared job queue before scaling horizontally.
+## iPhone
 
-## iPhone use
+Open the deployed HTTPS URL in Safari, unlock the dashboard, connect the selected broker, then use Share → Add to Home Screen.
 
-Open the deployed HTTPS URL in Safari, unlock the dashboard, connect FYERS, then use Share → Add to Home Screen. The page is responsive and has a standalone web-app manifest.
+## Hosting and security notes
 
-## Security
-
-- Never share FYERS App Secret, access token, or dashboard password in chat.
-- Do not commit `.env`.
-- Keep HTTPS enabled and use a strong `FLASK_SECRET_KEY` and `SCREENER_PASSWORD`.
 - The app has no order-placement endpoints.
+- Keep the repository private and do not commit `.env`.
+- Never share API keys, API secrets, access tokens, or the dashboard password in chat.
+- Render Free services may sleep after inactivity. That can interrupt market monitoring and clear in-memory history.
