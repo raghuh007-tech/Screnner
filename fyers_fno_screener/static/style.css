@@ -131,3 +131,7 @@ tbody tr:hover{background:#18283a}
   .history-status{padding:7px 2px;font-size:9px;gap:7px}
   .pulse{width:6px;height:6px}
 }
+
+.ath-reference{color:#9fcbff;text-decoration:none;font-weight:750;white-space:nowrap}
+.ath-reference:hover{text-decoration:underline;color:#c4e0ff}
+@media(max-width:760px){.ath-reference{display:inline-block;margin-top:3px}}
