@@ -20,7 +20,14 @@ from flask import Flask, jsonify, render_template, redirect, request, session, u
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', 'CHANGE_THIS_LONG_RANDOM_SECRET')
+flask_secret_key = os.getenv('FLASK_SECRET_KEY', '').strip()
+if not flask_secret_key:
+    # Never use a predictable fallback for a private dashboard. A random
+    # process-local key keeps sessions unforgeable until the owner configures
+    # a persistent key in the hosting environment.
+    flask_secret_key = secrets.token_urlsafe(48)
+    app.logger.warning('FLASK_SECRET_KEY is not set; using an ephemeral key until it is configured.')
+app.secret_key = flask_secret_key
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
@@ -243,7 +250,7 @@ def volume_ratio_for_time(candles, now=None):
         return None, None, 0
     now = now or datetime.now(IST)
     today = now.date()
-    # Include bars whose start time is at or before the current 5-minute bucket.
+    # Compare only through the last completed 5-minute bucket.
     current_bucket_minute = (now.hour * 60 + now.minute) // 5 * 5
     # The live quote includes a partial current 5-minute bucket. Compare only
     # with completed historical buckets to avoid overstating the baseline.
