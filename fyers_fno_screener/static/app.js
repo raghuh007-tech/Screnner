@@ -7,9 +7,11 @@ async function api(url) { const response = await fetch(url, {credentials:'same-o
 async function updateStatus() {
   try {
     const data = await api('/api/status');
-    $('status').textContent = data.connected ? 'FYERS connected' : 'FYERS not connected';
+    const brokerName = data.broker === 'zerodha' ? 'Zerodha Kite' : 'FYERS';
+    $('status').textContent = data.connected ? `${brokerName} connected` : `${brokerName} not connected`;
     $('status').className = data.connected ? 'status online' : 'status offline';
     if (data.error) $('feed').textContent = data.error;
+    if (!data.connected) $('feed').textContent = `Waiting for ${brokerName} connection`; 
   } catch (error) { $('status').textContent = 'Connection unavailable'; $('status').className = 'status offline'; }
 }
 function filteredRows() {
