@@ -5,6 +5,7 @@ import time
 import json
 import math
 import queue
+import re
 import hashlib
 import secrets
 import threading
@@ -35,66 +36,124 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
 )
 
-APP_ID = os.getenv('FYERS_APP_ID', '').strip()
-APP_SECRET = os.getenv('FYERS_APP_SECRET', '').strip()
-REDIRECT_URI = os.getenv('FYERS_REDIRECT_URI', '').strip()
-TOKEN = os.getenv('FYERS_ACCESS_TOKEN', '').strip()
+BROKER_PROVIDER = os.getenv('BROKER_PROVIDER', 'zerodha').strip().lower()
+if BROKER_PROVIDER not in {'zerodha', 'fyers'}:
+    raise RuntimeError("BROKER_PROVIDER must be 'zerodha' or 'fyers'.")
+
+KITE_API_KEY = os.getenv('KITE_API_KEY', '').strip()
+KITE_API_SECRET = os.getenv('KITE_API_SECRET', '').strip()
+KITE_REDIRECT_URI = os.getenv('KITE_REDIRECT_URI', '').strip()
+FYERS_APP_ID = os.getenv('FYERS_APP_ID', '').strip()
+FYERS_APP_SECRET = os.getenv('FYERS_APP_SECRET', '').strip()
+FYERS_REDIRECT_URI = os.getenv('FYERS_REDIRECT_URI', '').strip()
+
+APP_ID = KITE_API_KEY if BROKER_PROVIDER == 'zerodha' else FYERS_APP_ID
+APP_SECRET = KITE_API_SECRET if BROKER_PROVIDER == 'zerodha' else FYERS_APP_SECRET
+REDIRECT_URI = KITE_REDIRECT_URI if BROKER_PROVIDER == 'zerodha' else FYERS_REDIRECT_URI
+TOKEN = (os.getenv('KITE_ACCESS_TOKEN', '').strip() if BROKER_PROVIDER == 'zerodha'
+         else os.getenv('FYERS_ACCESS_TOKEN', '').strip())
 SCREENER_PASSWORD = os.getenv('SCREENER_PASSWORD', '').strip()
-API_ROOT = 'https://api-t1.fyers.in'
-DATA_ROOT = 'https://api-t1.fyers.in/data'
+KITE_ROOT = 'https://api.kite.trade'
+FYERS_ROOT = 'https://api-t1.fyers.in'
+FYERS_DATA_ROOT = FYERS_ROOT + '/data'
 IST = ZoneInfo('Asia/Kolkata')
 INDEX_NAMES = {'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50', 'SENSEX', 'BANKEX'}
 
 cache = {
-    'symbols': [], 'quotes': {}, 'intraday': {}, 'daily': {},
+    'symbols': [], 'quotes': {}, 'intraday': {}, 'daily': {}, 'instrument_tokens': {},
     'last_scan': 0, 'last_error': None, 'history_done': 0,
-    'history_total': 0, 'history_running': False, 'history_message': 'Waiting for FYERS connection',
+    'history_total': 0, 'history_running': False, 'history_message': 'Waiting for broker connection',
     'connected': bool(TOKEN), 'last_quote_count': 0,
 }
 lock = threading.RLock()
 
-# FYERS Standard Data API limits (as documented from 16 Oct 2026): 50/min.
-# Keep a safety margin and share the limiter across quote + history requests.
+# FYERS Standard Data API limits: keep a safety margin below its published quota.
 _api_times = deque()
 _history_times = deque()
 _api_lock = threading.Lock()
 
+# Kite Connect documented limits: quote 1 request/second; historical 3 requests/second.
+_kite_rate_lock = threading.Lock()
+_kite_last_quote = 0.0
+_kite_history_times = deque()
+
 
 def api_slot(priority=False):
-    """Reserve capacity for quote refreshes; throttle background history separately."""
-    while True:
-        with _api_lock:
-            now = time.monotonic()
-            while _api_times and now - _api_times[0] >= 60:
-                _api_times.popleft()
-            while _history_times and now - _history_times[0] >= 60:
-                _history_times.popleft()
-            total_ok = len(_api_times) < 44
-            history_ok = priority or len(_history_times) < 25
-            spacing_ok = not _api_times or now - _api_times[-1] >= 0.22
-            if total_ok and history_ok and spacing_ok:
-                _api_times.append(now)
-                if not priority:
-                    _history_times.append(now)
-                return
-            waits = [0.23]
-            if not total_ok and _api_times:
-                waits.append(60 - (now - _api_times[0]) + 0.05)
-            if not history_ok and _history_times:
-                waits.append(60 - (now - _history_times[0]) + 0.05)
-            wait = max(waits)
-        time.sleep(wait)
+    """Throttle provider calls within the active broker's documented limits."""
+    global _kite_last_quote
+    if BROKER_PROVIDER == 'zerodha':
+        while True:
+            with _kite_rate_lock:
+                now = time.monotonic()
+                while _kite_history_times and now - _kite_history_times[0] >= 1:
+                    _kite_history_times.popleft()
+                if priority:
+                    wait = max(0.0, 1.05 - (now - _kite_last_quote))
+                    if wait <= 0:
+                        _kite_last_quote = now
+                        return
+                else:
+                    wait = max(0.0, 0.36 - (now - _kite_history_times[-1])) if _kite_history_times else 0.0
+                    if len(_kite_history_times) < 3 and wait <= 0:
+                        _kite_history_times.append(now)
+                        return
+                    if len(_kite_history_times) >= 3:
+                        wait = max(wait, 1.0 - (now - _kite_history_times[0]) + 0.02)
+            time.sleep(max(wait, 0.02))
+    else:
+        while True:
+            with _api_lock:
+                now = time.monotonic()
+                while _api_times and now - _api_times[0] >= 60:
+                    _api_times.popleft()
+                while _history_times and now - _history_times[0] >= 60:
+                    _history_times.popleft()
+                total_ok = len(_api_times) < 44
+                history_ok = priority or len(_history_times) < 25
+                spacing_ok = not _api_times or now - _api_times[-1] >= 0.22
+                if total_ok and history_ok and spacing_ok:
+                    _api_times.append(now)
+                    if not priority:
+                        _history_times.append(now)
+                    return
+                waits = [0.23]
+                if not total_ok and _api_times:
+                    waits.append(60 - (now - _api_times[0]) + 0.05)
+                if not history_ok and _history_times:
+                    waits.append(60 - (now - _history_times[0]) + 0.05)
+                wait = max(waits)
+            time.sleep(wait)
 
 
-def auth_headers():
-    if not APP_ID or not TOKEN:
-        raise RuntimeError('FYERS is not connected. Sign in and select Connect FYERS.')
-    return {'Authorization': f'{APP_ID}:{TOKEN}', 'Content-Type': 'application/json'}
+def kite_headers():
+    if not KITE_API_KEY or not TOKEN:
+        raise RuntimeError('Zerodha Kite is not connected. Select Connect Broker and sign in.')
+    return {
+        'Authorization': f'token {KITE_API_KEY}:{TOKEN}',
+        'X-Kite-Version': '3',
+        'Content-Type': 'application/x-www-form-urlencoded',
+    }
 
 
-def fyers_get(path, params=None, priority=False):
+def fyers_headers():
+    if not FYERS_APP_ID or not TOKEN:
+        raise RuntimeError('FYERS is not connected. Select Connect Broker and sign in.')
+    return {'Authorization': f'{FYERS_APP_ID}:{TOKEN}', 'Content-Type': 'application/json'}
+
+
+def broker_get(path, params=None, priority=False):
+    if BROKER_PROVIDER == 'zerodha':
+        api_slot(priority=priority)
+        response = requests.get(KITE_ROOT + path, headers=kite_headers(), params=params, timeout=30)
+        if response.status_code == 429:
+            raise RuntimeError('Kite Connect rate limit reached. The scanner will retry on its next refresh.')
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get('status') == 'error':
+            raise RuntimeError(payload.get('message') or str(payload))
+        return payload
     api_slot(priority=priority)
-    response = requests.get(DATA_ROOT + path, headers=auth_headers(), params=params, timeout=25)
+    response = requests.get(FYERS_DATA_ROOT + path, headers=fyers_headers(), params=params, timeout=25)
     if response.status_code == 429:
         raise RuntimeError('FYERS data API rate limit reached. The scanner will retry on its next refresh.')
     response.raise_for_status()
@@ -102,6 +161,8 @@ def fyers_get(path, params=None, priority=False):
     if payload.get('s') == 'error':
         raise RuntimeError(payload.get('message') or str(payload))
     return payload
+
+
 
 
 def get_symbol_universe():
