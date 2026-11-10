@@ -15,8 +15,8 @@
 <body>
 <div class="shell">
   <header>
-    <div><div class="eyebrow">NSE · FYERS MARKET DATA</div><h1>F&O Live Screener</h1><p class="sub">One list · Three scans · Duplicate-free</p></div>
-    <div class="actions"><span id="status" class="status">Checking connection…</span><a class="connect" href="/connect-fyers">Connect FYERS</a><form method="post" action="/logout"><button class="logout" type="submit">Lock</button></form></div>
+    <div><div class="eyebrow">NSE · {{ broker_name|upper }} MARKET DATA</div><h1>F&O Live Screener</h1><p class="sub">One list · Three scans · Duplicate-free</p></div>
+    <div class="actions"><span id="status" class="status">Checking connection…</span><a class="connect" href="/connect-broker">Connect {{ broker_name }}</a><form method="post" action="/logout"><button class="logout" type="submit">Lock</button></form></div>
   </header>
 
   <section class="metrics">
@@ -29,7 +29,7 @@
   <section class="rule-strip">
     <div><b>Volume trigger</b><span>≥ 3.0× average cumulative volume at the same time over 20 prior sessions</span></div>
     <div><b>Daily momentum</b><span>≥ +2.00% from previous close</span></div>
-    <div><b>ATH trigger</b><span>Within 3.00% below highest daily high available in FYERS history</span></div>
+    <div><b>ATH trigger</b><span>Within 3.00% below highest daily high available in selected broker history</span></div>
   </section>
 
   <section class="toolbar">
@@ -40,9 +40,9 @@
   </section>
 
   <section class="panel">
-    <div class="panel-head"><div><h2>Combined live matches</h2><p id="subhead">Only stocks meeting at least one configured condition are shown.</p></div><span id="feed" class="feed">Waiting for FYERS</span></div>
+    <div class="panel-head"><div><h2>Combined live matches</h2><p id="subhead">Only stocks meeting at least one configured condition are shown.</p></div><span id="feed" class="feed">Waiting for {{ broker_name }}</span></div>
     <div class="table-wrap">
-      <table><thead><tr><th>Stock / signals</th><th>LTP</th><th>Chg %</th><th>Vol ×</th><th>Day volume</th><th>PDH</th><th>5Y ATH gap</th></tr></thead><tbody id="rows"><tr><td colspan="7" class="empty">Connect FYERS to start the scan.</td></tr></tbody></table>
+      <table><thead><tr><th>Stock / signals</th><th>LTP</th><th>Chg %</th><th>Vol ×</th><th>Day volume</th><th>PDH</th><th>5Y ATH gap</th></tr></thead><tbody id="rows"><tr><td colspan="7" class="empty">Connect {{ broker_name }} to start the scan.</td></tr></tbody></table>
     </div>
     <div id="mobileRows" class="mobile-rows"><div class="empty">Connect FYERS to start the scan.</div></div>
     <div class="footnote" id="coverage-note">Waiting for market data.</div>
