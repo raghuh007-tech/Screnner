@@ -39,9 +39,9 @@ button:disabled{opacity:.55;cursor:wait}
 .panel-head{padding:10px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
 .panel h2{font-size:14px;margin:0 0 3px}
 .panel p{font-size:10px;margin:0}
-.table-wrap{overflow:auto;max-height:calc(100vh - 405px);min-height:220px}
+.table-wrap{overflow-x:auto;overflow-y:visible;max-height:none;min-height:0}
 table{width:100%;border-collapse:separate;border-spacing:0;white-space:nowrap}
-th,td{text-align:right;padding:7px 10px;border-bottom:1px solid #202e40;font-size:11px;line-height:1.2;font-variant-numeric:tabular-nums}
+th,td{text-align:right;padding:4px 9px;border-bottom:1px solid #202e40;font-size:10.5px;line-height:1.1;font-variant-numeric:tabular-nums}
 th{position:sticky;top:0;z-index:2;color:#9db2cb;font-weight:750;background:#101a27;font-size:10px;text-transform:uppercase;letter-spacing:.35px}
 td:first-child,th:first-child{text-align:left}
 tbody tr{background:#111c2a;transition:background .12s ease}
@@ -73,7 +73,7 @@ tbody tr:hover{background:#18283a}
 
 @media(min-width:1200px){
   .table-wrap{max-height:calc(100vh - 370px)}
-  th,td{padding-top:6px;padding-bottom:6px}
+  th,td{padding-top:4px;padding-bottom:4px}
 }
 @media(max-width:900px){
   .shell{padding:14px 14px 24px}
