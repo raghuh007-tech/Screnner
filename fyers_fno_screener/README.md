@@ -6,11 +6,11 @@ A private, mobile-first dashboard for NSE stock F&O underlyings. It combines thr
 
 1. **PDH breakout:** LTP above the previous completed trading day's high, with volume at least 3× the average cumulative volume at the same time over the previous 20 sessions.
 2. **Daily momentum:** Daily change of at least +2.00% from the previous close, with the same 3× volume condition.
-3. **Near 5-year high:** LTP within 3.00% below the highest daily high in the available five-year data. This is not guaranteed to be a lifetime all-time high.
+3. **Near 5-year high:** LTP within 3.00% below the highest daily high in the available five-year data. This is not guaranteed to be a lifetime all-time high. The dashboard also links to Strota's separate full-history ATH screen as a reference. Strota defines its record as a split/bonus-adjusted highest daily close, uses live LTP during market hours, and lists stocks within 5% of that record.
 
 A stock appears once. All matching signals are grouped in its row/card.
 
-## Data method
+## Full-history ATH reference\n\nThe dashboard links to [Strota's full-history ATH screen](https://strota.in/screens/all-time-high-stocks). It reports split/bonus-adjusted record closing highs, using live LTP during market hours, and a 5% near-record band. It is an external cross-check, not an integrated feed. Strota's data hub lists machine-readable symbol and live-snapshot endpoints but does not currently document a machine-readable ATH-screen endpoint.\n\n## Data method
 
 - The universe is the unique stock underlyings in NSE F&O. Index underlyings are excluded.
 - Provider-specific instrument masters are translated into a common internal NSE cash-symbol format.
