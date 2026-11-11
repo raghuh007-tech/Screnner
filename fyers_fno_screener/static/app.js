@@ -11,7 +11,17 @@ async function updateStatus() {
     $('status').textContent = data.connected ? `${brokerName} connected` : `${brokerName} not connected`;
     $('status').className = data.connected ? 'status online' : 'status offline';
     if (data.error) $('feed').textContent = data.error;
-    if (!data.connected) $('feed').textContent = `Waiting for ${brokerName} connection`; 
+    if (!data.connected) $('feed').textContent = `Waiting for ${brokerName} connection`;
+    const storageNote = $('historyStorageText');
+    if (storageNote) {
+      if (data.history_cache_persistent_mount) {
+        storageNote.textContent = `Persistent history disk active · ${data.history_cache_symbols} stocks saved`;
+        storageNote.className = 'storage-note storage-ok';
+      } else {
+        storageNote.textContent = 'Temporary Render storage · backfill can repeat after sleep or restart. Attach a persistent disk at /var/data.';
+        storageNote.className = 'storage-note storage-warning';
+      }
+    }
   } catch (error) { $('status').textContent = 'Connection unavailable'; $('status').className = 'status offline'; }
 }
 function filteredRows() {
