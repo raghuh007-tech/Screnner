@@ -164,7 +164,15 @@ def init_history_store():
             try:
                 candles = json.loads(candles_json)
                 if timeframe == '5m':
-                    cache['intraday'][symbol] = candles
+                    cutoff = datetime.now(IST).date() - timedelta(days=45)
+                    trimmed = []
+                    for candle in candles:
+                        try:
+                            if len(candle) >= 6 and datetime.fromtimestamp(int(candle[0]), IST).date() >= cutoff:
+                                trimmed.append(candle)
+                        except (TypeError, ValueError, OverflowError, OSError):
+                            continue
+                    cache['intraday'][symbol] = trimmed
                 elif timeframe == '1d':
                     cache['daily'][symbol] = candles
             except (TypeError, ValueError, json.JSONDecodeError):
@@ -238,11 +246,34 @@ def clear_history_retry(symbol):
 
 
 def merge_candles(old_candles, new_candles):
-    merged = {int(candle[0]): candle for candle in (old_candles or []) if len(candle) >= 6}
-    for candle in new_candles or []:
-        if len(candle) >= 6:
-            merged[int(candle[0])] = candle
-    return [merged[key] for key in sorted(merged)]
+    """Merge sorted candle lists without allocating a large timestamp dictionary."""
+    old = [c for c in (old_candles or []) if isinstance(c, (list, tuple)) and len(c) >= 6]
+    new = [c for c in (new_candles or []) if isinstance(c, (list, tuple)) and len(c) >= 6]
+    merged = []
+    i = j = 0
+    while i < len(old) and j < len(new):
+        try:
+            old_ts = int(old[i][0])
+            new_ts = int(new[j][0])
+        except (TypeError, ValueError, OverflowError):
+            if i < len(old):
+                i += 1
+            if j < len(new):
+                j += 1
+            continue
+        if old_ts < new_ts:
+            merged.append(old[i])
+            i += 1
+        elif new_ts < old_ts:
+            merged.append(new[j])
+            j += 1
+        else:
+            merged.append(new[j])
+            i += 1
+            j += 1
+    merged.extend(old[i:])
+    merged.extend(new[j:])
+    return merged
 
 
 def history_due(symbol, today=None):
@@ -742,13 +773,19 @@ def warm_history_for_symbol(symbol):
         app.logger.info('Incremental 5m history update for %s: %s to %s', symbol, intraday_start, today)
         recent_intraday = fetch_history(symbol, '5', intraday_start.isoformat(), today.isoformat())
         intraday = merge_candles(intraday_existing, recent_intraday)
-        cutoff = today - timedelta(days=60)
-        intraday = [
-            candle for candle in intraday
-            if datetime.fromtimestamp(int(candle[0]), IST).date() >= cutoff
-        ]
     else:
         intraday = intraday_existing
+
+    # Retain only 45 calendar days of 5m candles in memory and persistent cache.
+    cutoff = today - timedelta(days=45)
+    trimmed_intraday = []
+    for candle in intraday:
+        try:
+            if len(candle) >= 6 and datetime.fromtimestamp(int(candle[0]), IST).date() >= cutoff:
+                trimmed_intraday.append(candle)
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+    intraday = trimmed_intraday
 
     if intraday is not intraday_existing:
         with lock:
