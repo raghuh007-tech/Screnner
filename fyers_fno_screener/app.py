@@ -959,7 +959,7 @@ def build_scan_row(symbol, quote, now=None):
     volume_ok = volume_ratio is not None and volume_ratio >= 3.0
     pdh_ok = prev_day_high is not None and ltp > prev_day_high and volume_ok
     gain_ok = change_pct is not None and change_pct >= 2.0 and volume_ok
-    week52_ok = week52_distance is not None and week52_distance <= 3.0
+    week52_ok = week52_distance is not None and week52_distance <= 3.0 and pdh_ok
     week52_momentum_ok = week52_distance is not None and week52_distance <= 5.0 and change_pct is not None and change_pct >= 2.0 and volume_ok
     sentiment = classify_sentiment(change_pct)
 
