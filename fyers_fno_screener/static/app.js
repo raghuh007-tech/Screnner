@@ -169,7 +169,7 @@ $('refresh').addEventListener('click', refresh);
   }
   await updateStatus();
   await refresh();
-  refreshTimer = setInterval(refresh, 20000);
+  refreshTimer = setInterval(refresh, 60000);
   setInterval(updateStatus, 30000);
 })();
 
