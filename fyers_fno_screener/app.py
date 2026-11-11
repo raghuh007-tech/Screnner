@@ -507,10 +507,12 @@ def warm_history_for_symbol(symbol):
 
     # Full five-year daily backfill only if this symbol has no saved daily history.
     with lock:
+        daily_exists = symbol in cache['daily']
+        intraday_exists = symbol in cache['intraday']
         daily_existing = cache['daily'].get(symbol, [])
         intraday_existing = cache['intraday'].get(symbol, [])
 
-    if not daily_existing:
+    if not daily_exists:
         daily_start = today - timedelta(days=5 * 366)
         daily_candles = []
         app.logger.info('Initial five-year daily backfill for %s: %s to %s', symbol, daily_start, today - timedelta(days=1))
@@ -535,7 +537,7 @@ def warm_history_for_symbol(symbol):
     # Initial volume baseline: 45 days once. Later: fetch only the latest
     # 5 calendar days and merge. This avoids downloading the same 45-day set
     # every day for every stock.
-    if not intraday_existing:
+    if not intraday_exists:
         intraday_start = today - timedelta(days=45)
         app.logger.info('Initial 5m history backfill for %s: %s to %s', symbol, intraday_start, today)
         intraday = fetch_history(symbol, '5', intraday_start.isoformat(), today.isoformat())
