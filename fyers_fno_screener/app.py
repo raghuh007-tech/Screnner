@@ -113,11 +113,12 @@ def _history_db_connect():
 
 
 def summarize_daily_candles(candles, today=None):
-    """Keep only the previous completed session high and five-year ATH in RAM."""
+    """Keep only previous-session high and rolling 52-week high in RAM."""
     today = today or datetime.now(IST).date()
+    cutoff = today - timedelta(days=366)
     latest_date = None
     latest_high = None
-    ath = None
+    week52_high = None
     for candle in candles or []:
         try:
             if len(candle) < 6:
@@ -126,7 +127,8 @@ def summarize_daily_candles(candles, today=None):
             if candle_date >= today:
                 continue
             high = float(candle[2])
-            ath = high if ath is None else max(ath, high)
+            if candle_date >= cutoff:
+                week52_high = high if week52_high is None else max(week52_high, high)
             if latest_date is None or candle_date > latest_date:
                 latest_date, latest_high = candle_date, high
             elif candle_date == latest_date:
@@ -136,27 +138,7 @@ def summarize_daily_candles(candles, today=None):
     return {
         'last_date': latest_date.isoformat() if latest_date else None,
         'prev_day_high': latest_high,
-        'ath': ath,
-    }
-
-
-def merge_daily_summary(existing, recent, today=None):
-    today = today or datetime.now(IST).date()
-    updated = summarize_daily_candles(recent, today)
-    existing = existing or {}
-    ath_values = [v for v in (existing.get('ath'), updated.get('ath')) if v is not None]
-    if updated.get('last_date') and (
-        not existing.get('last_date') or updated['last_date'] >= existing['last_date']
-    ):
-        last_date = updated['last_date']
-        prev_day_high = updated.get('prev_day_high')
-    else:
-        last_date = existing.get('last_date')
-        prev_day_high = existing.get('prev_day_high')
-    return {
-        'last_date': last_date,
-        'prev_day_high': prev_day_high,
-        'ath': max(ath_values) if ath_values else None,
+        'week52_high': week52_high,
     }
 
 
@@ -222,8 +204,7 @@ def init_history_store():
                             continue
                     cache['intraday'][symbol] = trimmed
                 elif timeframe == '1d':
-                    # Do not retain five years of daily candle arrays in RAM.
-                    cache['daily'][symbol] = summarize_daily_candles(candles)
+                    cache['daily'][symbol] = candles if isinstance(candles, dict) else summarize_daily_candles(candles)
             except (TypeError, ValueError, json.JSONDecodeError):
                 app.logger.warning('Ignoring invalid cached history for %s (%s)', symbol, timeframe)
 
@@ -784,37 +765,16 @@ def warm_history_for_symbol(symbol):
     today = datetime.now(IST).date()
     meta = history_meta.get(symbol, {})
 
-    # Full five-year daily backfill only if this symbol has no saved daily history.
-    with lock:
-        daily_exists = symbol in cache['daily']
-        intraday_exists = symbol in cache['intraday']
-        daily_existing = cache['daily'].get(symbol, [])
-        intraday_existing = cache['intraday'].get(symbol, [])
-
-    if not daily_exists:
-        daily_start = today - timedelta(days=5 * 366)
-        daily_candles = []
-        app.logger.info('Initial five-year daily backfill for %s: %s to %s', symbol, daily_start, today - timedelta(days=1))
-        for start, end in date_chunks(daily_start, today - timedelta(days=1), 366):
-            daily_candles.extend(fetch_history(symbol, 'D', start.isoformat(), end.isoformat()))
-        # Persist the full history once, but retain only two numeric summaries in RAM.
-        save_history(symbol, '1d', daily_candles, today.isoformat())
+    # One year of daily candles is enough for rolling 52-week high.
+    # Refresh the window once per day so old highs roll off correctly.
+    if not daily_exists or not isinstance(daily_existing, dict) or meta.get('daily_fetch_date') != today.isoformat():
+        daily_start = today - timedelta(days=366)
+        app.logger.info('52-week daily history refresh for %s: %s to %s', symbol, daily_start, today - timedelta(days=1))
+        daily_candles = fetch_history(symbol, 'D', daily_start.isoformat(), today.isoformat())
         daily_summary = summarize_daily_candles(daily_candles, today)
+        # Persist only the compact summary, not full daily candle history.
+        save_history(symbol, '1d', daily_summary, today.isoformat())
         del daily_candles
-    elif meta.get('daily_fetch_date') != today.isoformat():
-        recent_start = today - timedelta(days=5)
-        app.logger.info('Incremental daily summary update for %s: %s to %s', symbol, recent_start, today)
-        recent = fetch_history(symbol, 'D', recent_start.isoformat(), today.isoformat())
-        daily_summary = merge_daily_summary(daily_existing, recent, today)
-        del recent
-        with history_db_lock:
-            with _history_db_connect() as db:
-                db.execute(
-                    "INSERT INTO history_meta(symbol, daily_fetch_date) VALUES (?, ?) "
-                    "ON CONFLICT(symbol) DO UPDATE SET daily_fetch_date=excluded.daily_fetch_date",
-                    (symbol, today.isoformat()),
-                )
-        history_meta.setdefault(symbol, {})['daily_fetch_date'] = today.isoformat()
     else:
         daily_summary = daily_existing
 
@@ -993,16 +953,14 @@ def build_scan_row(symbol, quote, now=None):
     volume_ratio = day_volume / avg_same_time if avg_same_time and avg_same_time > 0 else None
 
     prev_day_high = daily.get('prev_day_high') if isinstance(daily, dict) else None
-    historical_ath = daily.get('ath') if isinstance(daily, dict) else None
-    day_high = quote.get('high_price')
-    ath = max([x for x in (historical_ath, float(day_high) if day_high is not None else None) if x is not None], default=None)
-    ath_distance = ((ath - ltp) / ath * 100) if ath and ath > 0 else None
+    week52_high = daily.get('week52_high') if isinstance(daily, dict) else None
+    week52_distance = ((week52_high - ltp) / week52_high * 100) if week52_high and week52_high > 0 else None
 
     volume_ok = volume_ratio is not None and volume_ratio >= 3.0
     pdh_ok = prev_day_high is not None and ltp > prev_day_high and volume_ok
     gain_ok = change_pct is not None and change_pct >= 2.0 and volume_ok
-    ath_ok = ath_distance is not None and ath_distance <= 3.0
-    ath_momentum_ok = ath_distance is not None and ath_distance <= 5.0 and change_pct is not None and change_pct >= 2.0 and volume_ok
+    week52_ok = week52_distance is not None and week52_distance <= 3.0
+    week52_momentum_ok = week52_distance is not None and week52_distance <= 5.0 and change_pct is not None and change_pct >= 2.0 and volume_ok
     sentiment = classify_sentiment(change_pct)
 
     signals = []
@@ -1010,10 +968,10 @@ def build_scan_row(symbol, quote, now=None):
         signals.append('PDH BREAKOUT')
     if gain_ok:
         signals.append('+2% MOMENTUM')
-    if ath_ok:
-        signals.append('NEAR 5Y HIGH')
-    if ath_momentum_ok:
-        signals.append('5Y HIGH +2% + 3X')
+    if week52_ok:
+        signals.append('NEAR 52W HIGH')
+    if week52_momentum_ok:
+        signals.append('52W HIGH +2% + 3X')
     if not signals:
         return None
 
@@ -1028,8 +986,8 @@ def build_scan_row(symbol, quote, now=None):
         'avg_same_time_volume': avg_same_time,
         'volume_sessions': sessions,
         'prev_day_high': prev_day_high,
-        'ath': ath,
-        'ath_distance_pct': ath_distance,
+        'week52_high': week52_high,
+        'ath_distance_pct': week52_distance,
         'signals': signals,
         'signal_count': len(signals),
         'history_ready': bool(intraday is not None and daily is not None),
@@ -1223,8 +1181,8 @@ def scan():
             'matched': len(rows),
             'pd_breakouts': sum('PDH BREAKOUT' in row['signals'] for row in rows),
             'momentum': sum('+2% MOMENTUM' in row['signals'] for row in rows),
-            'near_ath': sum('NEAR 5Y HIGH' in row['signals'] for row in rows),
-            'ath_momentum': sum('5Y HIGH +2% + 3X' in row['signals'] for row in rows),
+            'near_52w': sum('NEAR 52W HIGH' in row['signals'] for row in rows),
+            'week52_momentum': sum('52W HIGH +2% + 3X' in row['signals'] for row in rows),
             'sentiment': sentiments,
             'market_context': context,
             'sector_coverage': sum(1 for symbol in symbols if cache['stock_sectors'].get(symbol) not in (None, 'Sector unavailable')),
