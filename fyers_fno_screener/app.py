@@ -929,6 +929,34 @@ def summarize_sentiment(quotes):
     return {'overall': overall, 'score': score, 'counts': counts, 'valid_stocks': valid}
 
 
+
+def build_top_gainers(quotes, symbols, now):
+    gainers = []
+    for symbol in symbols:
+        quote = quotes.get(symbol)
+        if not quote: continue
+        try:
+            ltp = float(quote.get('lp')); change_pct = float(quote.get('chp')); day_volume = float(quote.get('volume') or 0)
+        except (TypeError, ValueError): continue
+        if change_pct <= 0: continue
+        with lock:
+            intraday = cache['intraday'].get(symbol); daily = cache['daily'].get(symbol)
+        avg_same_time, _, _ = volume_ratio_for_time(intraday or [], now)
+        volume_ratio = day_volume / avg_same_time if avg_same_time and avg_same_time > 0 else None
+        prev_day_high = daily.get('prev_day_high') if isinstance(daily, dict) else None
+        week52_high = daily.get('week52_high') if isinstance(daily, dict) else None
+        week52_distance = ((week52_high - ltp) / week52_high * 100) if week52_high and week52_high > 0 else None
+        confirmations = []
+        if change_pct >= 2.0: confirmations.append('Daily momentum')
+        if volume_ratio is not None and volume_ratio >= 3.0: confirmations.append('3× volume')
+        if prev_day_high is not None and ltp > prev_day_high: confirmations.append('PDH breakout')
+        if week52_distance is not None and week52_distance <= 3.0: confirmations.append('Near 52W high')
+        count = len(confirmations)
+        level = 'strong' if count >= 3 else 'moderate' if count == 2 else 'limited' if count == 1 else 'none'
+        gainers.append({'symbol': symbol.replace('NSE:', '').replace('-EQ', ''), 'ltp': ltp, 'change_pct': change_pct, 'volume_ratio': volume_ratio, 'confirmations': confirmations, 'confirmation_count': count, 'confirmation_level': level})
+    gainers.sort(key=lambda row: row['change_pct'], reverse=True)
+    return gainers[:10]
+
 def build_scan_row(symbol, quote, now=None):
     now = now or datetime.now(IST)
     ltp = quote.get('lp')
@@ -987,6 +1015,7 @@ def build_scan_row(symbol, quote, now=None):
         'volume_sessions': sessions,
         'prev_day_high': prev_day_high,
         'week52_high': week52_high,
+        'week52_distance_pct': week52_distance,
         'ath_distance_pct': week52_distance,
         'signals': signals,
         'signal_count': len(signals),
@@ -1172,9 +1201,11 @@ def scan():
             ready = sum(1 for symbol in symbols if symbol in cache['intraday'] and symbol in cache['daily'])
             history_running = cache['history_running']
         sentiments = summarize_sentiment(quotes)
+        top_gainers = build_top_gainers(quotes, symbols, now)
         context = market_context()
         return jsonify({
             'rows': rows,
+            'top_gainers': top_gainers,
             'coverage': len(quotes),
             'quote_volume_nonzero': sum(1 for quote in quotes.values() if quote.get('volume') not in (None, 0)),
             'universe': len(symbols),
