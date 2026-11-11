@@ -10,7 +10,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <title>Oldpal Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css?v=9">
+  <link rel="stylesheet" href="/static/style.css?v=10">
 </head>
 <body>
 <div class="shell">
@@ -45,18 +45,20 @@
     </article>
   </section>
 
+  <section class="panel gainers-panel"><div class="panel-head"><div><h2>Top 10 F&O gainers today</h2><p>Ranked by daily gain · colour shows confirmation strength</p></div></div><div id="gainersRows" class="gainers-list"><div class="empty">Waiting for market data.</div></div></section>
+
   <section class="metrics">
     <div class="metric"><span>F&O stocks</span><strong id="universe">—</strong><small>Unique cash underlyings</small></div>
     <div class="metric"><span>PDH breakouts</span><strong id="pdhCount">—</strong><small>Above previous day high + 3X volume</small></div>
     <div class="metric"><span>+2% momentum</span><strong id="momentumCount">—</strong><small>Daily gain + 3X volume</small></div>
-    <div class="metric"><span>Near 5Y high</span><strong id="athCount">—</strong><small>Within 3% of available 5Y high</small></div>
-    <div class="metric metric-highlight"><span>5Y high +2% + 3X</span><strong id="athMomentumCount">—</strong><small>Within 5% high + momentum + volume</small></div>
+    <div class="metric"><span>Near 52W high</span><strong id="athCount">—</strong><small>Within 3% of 52-week high</small></div>
+    <div class="metric metric-highlight"><span>52W high +2% + 3X</span><strong id="athMomentumCount">—</strong><small>Within 5% high + momentum + volume</small></div>
   </section>
 
   <section class="rule-strip">
     <div><b>Volume trigger</b><span>≥ 3.0× average cumulative volume at the same time over 20 prior sessions</span></div>
     <div><b>Daily momentum</b><span>≥ +2.00% from previous close</span></div>
-    <div><b>Near-high momentum</b><span>Within 5.00% of available five-year high +2% daily change +3× volume. <a class="ath-reference" href="https://strota.in/screens/all-time-high-stocks" target="_blank" rel="noopener noreferrer">Full-history ATH reference ↗</a></span></div>
+    <div><b>Near-high momentum</b><span>Within 5.00% of rolling 52-week high +2% daily change +3× volume. <a class="ath-reference" href="https://strota.in/screens/all-time-high-stocks" target="_blank" rel="noopener noreferrer"></a></span></div>
   </section>
 
   <section class="toolbar">
@@ -65,7 +67,7 @@
       <option value="all">All signals</option>
       <option value="PDH BREAKOUT">PDH breakout</option>
       <option value="+2% MOMENTUM">+2% momentum</option>
-      <option value="NEAR 5Y HIGH">Near 5Y high</option>
+      <option value="NEAR 52W HIGH">Near 5Y high</option>
       <option value="5Y HIGH +2% + 3X">5Y high +2% + 3X</option>
       <option value="multiple">Multiple signals</option>
     </select>
@@ -73,7 +75,7 @@
       <option value="signal_count">Sort: strongest signals</option>
       <option value="volume_ratio">Sort: volume multiple</option>
       <option value="change_pct">Sort: daily change</option>
-      <option value="ath_distance_pct">Sort: closest to 5Y high</option>
+      <option value="week52_distance_pct">Sort: closest to 52W high</option>
     </select>
     <button id="refresh">Refresh</button>
   </section>
@@ -85,7 +87,7 @@
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Stock / sector / signals</th><th>LTP</th><th>Chg %</th><th>Sentiment</th><th>Vol ×</th><th>Day volume</th><th>PDH</th><th>5Y high gap</th></tr></thead>
+        <thead><tr><th>Stock / sector / signals</th><th>LTP</th><th>Chg %</th><th>Sentiment</th><th>Vol ×</th><th>Day volume</th><th>PDH</th><th>52W high gap</th></tr></thead>
         <tbody id="rows"><tr><td colspan="8" class="empty">Connect {{ broker_name }} to start the scan.</td></tr></tbody>
       </table>
     </div>
@@ -97,7 +99,7 @@
     <span id="historyStorageText" class="storage-note">Checking history storage…</span>
   </section>
   <footer>
-    Scanner only. No orders are placed. Sentiment is based only on the NSE F&O stock universe. The internal near-high condition uses available five-year daily highs, not a verified lifetime ATH. Sector leaders are ranked by available NSE sector-index daily percentage change. Stock sectors use the Nifty 500 industry classification; F&O stocks outside it are labelled Other F&O.
+    Scanner only. No orders are placed. Sentiment is based only on the NSE F&O stock universe. The near-high condition uses rolling 52-week daily highs. Sector leaders are ranked by available NSE sector-index daily percentage change. Stock sectors use the Nifty 500 industry classification; F&O stocks outside it are labelled Other F&O.
   </footer>
 </div>
 
@@ -106,6 +108,6 @@
 <div class="chart-timeframes"><button data-tf="1" type="button">1m</button><button class="active" data-tf="5" type="button">5m</button><button data-tf="15" type="button">15m</button><button data-tf="60" type="button">1h</button></div>
 <div id="stockChart" class="stock-chart"></div><div class="chart-legend"><span class="ema10">EMA 10</span><span class="ema20">EMA 20</span></div><div id="chartMessage" class="chart-message">Loading candles…</div>
 </section></div>
-<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=8"></script>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=9"></script>
 </body>
 </html>
