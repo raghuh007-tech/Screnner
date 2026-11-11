@@ -133,6 +133,11 @@ def init_history_store():
                 'last_error': row[4],
             }
 
+        app.logger.info(
+            'Historical cache loaded from %s: %d symbols with daily candles, %d with intraday candles',
+            HISTORY_DB_PATH, len(cache['daily']), len(cache['intraday'])
+        )
+
 
 def save_history(symbol, timeframe, candles, fetched_date=None):
     fetched_date = fetched_date or datetime.now(IST).date().isoformat()
@@ -508,13 +513,15 @@ def warm_history_for_symbol(symbol):
     if not daily_existing:
         daily_start = today - timedelta(days=5 * 366)
         daily_candles = []
+        app.logger.info('Initial five-year daily backfill for %s: %s to %s', symbol, daily_start, today - timedelta(days=1))
         for start, end in date_chunks(daily_start, today - timedelta(days=1), 366):
             daily_candles.extend(fetch_history(symbol, 'D', start.isoformat(), end.isoformat()))
         daily_candles = merge_candles([], daily_candles)
     elif meta.get('daily_fetch_date') != today.isoformat():
         # Refresh only the latest 10 calendar days and merge them into the
         # stored five-year history. Do not download the full five years again.
-        recent_start = today - timedelta(days=10)
+        recent_start = today - timedelta(days=5)
+        app.logger.info('Incremental daily history update for %s: %s to %s', symbol, recent_start, today)
         recent = fetch_history(symbol, 'D', recent_start.isoformat(), today.isoformat())
         daily_candles = merge_candles(daily_existing, recent)
     else:
@@ -525,11 +532,27 @@ def warm_history_for_symbol(symbol):
             cache['daily'][symbol] = daily_candles
         save_history(symbol, '1d', daily_candles, today.isoformat())
 
-    # The 20-session volume comparison needs a rolling 45-day 5-minute set.
-    # Request it once per day, not every 20-second scanner refresh.
-    if not intraday_existing or meta.get('intraday_fetch_date') != today.isoformat():
+    # Initial volume baseline: 45 days once. Later: fetch only the latest
+    # 5 calendar days and merge. This avoids downloading the same 45-day set
+    # every day for every stock.
+    if not intraday_existing:
         intraday_start = today - timedelta(days=45)
+        app.logger.info('Initial 5m history backfill for %s: %s to %s', symbol, intraday_start, today)
         intraday = fetch_history(symbol, '5', intraday_start.isoformat(), today.isoformat())
+    elif meta.get('intraday_fetch_date') != today.isoformat():
+        intraday_start = today - timedelta(days=5)
+        app.logger.info('Incremental 5m history update for %s: %s to %s', symbol, intraday_start, today)
+        recent_intraday = fetch_history(symbol, '5', intraday_start.isoformat(), today.isoformat())
+        intraday = merge_candles(intraday_existing, recent_intraday)
+        cutoff = today - timedelta(days=60)
+        intraday = [
+            candle for candle in intraday
+            if datetime.fromtimestamp(int(candle[0]), IST).date() >= cutoff
+        ]
+    else:
+        intraday = intraday_existing
+
+    if intraday is not intraday_existing:
         with lock:
             cache['intraday'][symbol] = intraday
         save_history(symbol, '5m', intraday, today.isoformat())
@@ -569,8 +592,15 @@ def start_history_worker(symbols):
         due = [symbol for symbol in symbols if history_due(symbol, today)]
         if not due:
             return
+        # Reserve the worker slot before starting the thread. This prevents
+        # concurrent /api/scan requests from launching duplicate history jobs.
+        cache['history_running'] = True
         thread = threading.Thread(target=history_worker, args=(due,), daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except Exception:
+            cache['history_running'] = False
+            raise
 
 
 def volume_ratio_for_time(candles, now=None):
@@ -793,6 +823,7 @@ def status():
             'history_running': cache['history_running'],
             'history_message': cache['history_message'],
             'history_cache_path': HISTORY_DB_PATH,
+            'history_cache_persistent_mount': HISTORY_DB_PATH.startswith('/var/data/'),
             'history_cache_symbols': len(set(cache['daily']) & set(cache['intraday'])),
             'history_due_today': sum(1 for symbol in cache['symbols'] if history_due(symbol)),
             'quote_count': cache['last_quote_count'],
