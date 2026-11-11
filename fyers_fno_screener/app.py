@@ -191,6 +191,9 @@ def init_history_store():
                 cache['sector_updated_at'] = value
             elif key == 'sector_retry_after':
                 cache['sector_retry_after'] = value
+            elif key == 'broker_access_token' and not TOKEN:
+                # The Render persistent disk keeps the broker session across daily suspends.
+                globals()['TOKEN'] = value
 
         app.logger.info(
             'Historical cache loaded from %s: %d symbols with daily candles, %d with intraday candles',
@@ -1080,6 +1083,16 @@ def callback():
         if response.status_code >= 400 or data.get('s') != 'ok' or not data.get('access_token'):
             return f"FYERS token exchange failed: {data.get('message', 'Unknown error')}", 400
         TOKEN = data['access_token']
+
+    # Persist the broker token on the mounted Render disk so daily suspend/resume
+    # does not force a fresh broker login. The database is private to this service.
+    with history_db_lock:
+        with _history_db_connect() as db:
+            db.execute(
+                "INSERT INTO app_meta (meta_key, meta_value) VALUES (?, ?) "
+                "ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value",
+                ('broker_access_token', TOKEN),
+            )
 
     cache['connected'] = True
     cache['symbols'] = []
