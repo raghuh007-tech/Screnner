@@ -10,7 +10,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <title>Oldpal Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css?v=10">
+  <link rel="stylesheet" href="/static/style.css?v=11">
 </head>
 <body>
 <div class="shell">
@@ -47,7 +47,7 @@
 
   <section class="panel gainers-panel"><div class="panel-head"><div><h2>Top 10 F&O gainers today</h2><p>Ranked by daily gain · colour shows confirmation strength</p></div></div><div id="gainersRows" class="gainers-list"><div class="empty">Waiting for market data.</div></div></section>
 
-  <section class="metrics">
+  <section class="momentum-grid">\n    <article class="panel momentum-panel"><div class="panel-head"><div><h2>⚡ Fresh momentum</h2><p>New 5-minute acceleration · minimum 2 confirmations</p></div><span class="live-pill">LIVE</span></div><div id="freshMomentum" class="momentum-list"><div class="empty">Building 5-minute baseline…</div></div></article>\n    <article class="panel momentum-panel"><div class="panel-head"><div><h2>↗ Strongest momentum</h2><p>Top positive 5-minute moves · continuously ranked</p></div><span class="live-pill">5 MIN</span></div><div id="strongMomentum" class="momentum-list"><div class="empty">Building 5-minute baseline…</div></div></article>\n  </section>\n\n  <section class="metrics">
     <div class="metric"><span>F&O stocks</span><strong id="universe">—</strong><small>Unique cash underlyings</small></div>
     <div class="metric"><span>PDH breakouts</span><strong id="pdhCount">—</strong><small>Above previous day high + 3X volume</small></div>
     <div class="metric"><span>+2% momentum</span><strong id="momentumCount">—</strong><small>Daily gain + 3X volume</small></div>
@@ -108,6 +108,6 @@
 <div class="chart-timeframes"><button data-tf="1" type="button">1m</button><button class="active" data-tf="5" type="button">5m</button><button data-tf="15" type="button">15m</button><button data-tf="60" type="button">1h</button></div>
 <div id="stockChart" class="stock-chart"></div><div class="chart-legend"><span class="ema10">EMA 10</span><span class="ema20">EMA 20</span></div><div id="chartMessage" class="chart-message">Loading candles…</div>
 </section></div>
-<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=9"></script>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=10"></script>
 </body>
 </html>
