@@ -221,3 +221,65 @@ tbody tr:hover{background:#18283a}
  .stock-stats span{font-size:6.5px}
  .stock-stats b{font-size:7px}
 }
+
+/* Mobile-first compact stock list: one overall market sentiment, no sentiment tabs */
+@media(max-width:760px){
+  .shell{padding:9px 9px calc(16px + env(safe-area-inset-bottom))}
+  header{align-items:center;margin-bottom:8px}
+  h1{font-size:18px;margin:2px 0}
+  .sub{font-size:9px;line-height:1.25}
+  .actions{max-width:42%;gap:4px}
+  .actions .status{font-size:8px}
+  .actions .connect,.actions .logout{font-size:9px;padding:7px 8px}
+
+  /* Keep only Nifty and the single overall F&O sentiment summary */
+  .market-pulse{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:7px}
+  .market-pulse .pulse-card:nth-child(3){display:none}
+  .pulse-card{padding:9px 10px;min-height:67px;justify-content:center}
+  .pulse-label{font-size:7px;min-height:0;letter-spacing:.65px}
+  .pulse-card strong{font-size:19px}
+  .sentiment-pulse .sentiment-value{font-size:21px}
+  .pulse-card small{font-size:7px;line-height:1.2}
+
+  /* Hide secondary dashboard blocks to bring stocks above the fold */
+  .metrics,.rule-strip{display:none}
+  .toolbar{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:5px;margin:7px 0}
+  .toolbar input{grid-column:1/-1}
+  .toolbar input,.toolbar select,.toolbar button{min-height:36px;font-size:10px}
+  .panel{margin-top:5px}
+  .panel-head{padding:8px 10px}
+  .panel h2{font-size:13px}
+  .panel p{font-size:8px}
+  .feed{font-size:8px}
+
+  /* Full-width cards make symbols and price changes easy to scan */
+  .mobile-rows{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;padding:7px}
+  .stock-card{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    column-gap:10px;
+    row-gap:3px;
+    padding:9px 10px;
+    border-radius:9px;
+  }
+  .stock-top{grid-column:1/-1;gap:8px}
+  .stock-top b{font-size:13px;letter-spacing:.2px}
+  .stock-top strong{font-size:14px}
+  .stock-meta{grid-column:1/-1;font-size:8px;margin-top:-1px}
+  .stock-card-tags{grid-column:1/-1;gap:4px;margin-top:3px}
+  .stock-card-tags .tag{font-size:7px;padding:3px 5px}
+  .stock-sentiment{grid-column:1/-1;margin-top:3px;font-size:10px}
+  .stock-sentiment .sentiment-tag{font-size:8px;padding:3px 6px}
+  .stock-sentiment>span:last-child{font-size:12px;font-weight:800}
+  .stock-stats{
+    grid-column:1/-1;
+    grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:4px;
+    margin-top:5px;
+    padding-top:6px;
+    border-top:1px solid #26374d;
+  }
+  .stock-stats span{display:flex;flex-direction:column;align-items:flex-start;gap:2px;font-size:7px;white-space:nowrap}
+  .stock-stats b{font-size:9px}
+  .footnote,footer{font-size:8px}
+}
