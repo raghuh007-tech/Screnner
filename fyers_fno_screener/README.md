@@ -1,4 +1,4 @@
-# NSE F&O Live Screener
+# Oldpal Dashboard
 
 A private, mobile-first dashboard for NSE stock F&O underlyings. It combines three scanners into one duplicate-free list. It only reads market data and does not place orders.
 
@@ -89,3 +89,19 @@ Historical candles are stored in SQLite by symbol and timeframe.
 - The dashboard status endpoint reports how many symbols have both daily and intraday history cached.
 
 **Render storage limitation:** the current Free web service has an ephemeral filesystem. Render deletes local SQLite files when the service spins down, restarts, or redeploys. To preserve the cache across those events, use a paid Render web-service instance and attach a persistent disk mounted at `/var/data`, then set `HISTORY_DB_PATH=/var/data/history_cache.sqlite3`. Do not attach a disk to the current Free instance; Render does not support persistent disks on Free web services. A Free Render Postgres database is not a long-term substitute because it expires after 30 days.
+
+
+## Oldpal Dashboard market context and sentiment
+
+- The stock universe remains the NSE stock F&O universe only. Indices are excluded from stock breadth.
+- Every F&O stock is classified from its daily percentage change:
+  - Bullish: +2.00% or higher
+  - Mild Bullish: above +0.25% and below +2.00%
+  - Neutral: -0.25% to +0.25%
+  - Mild Bearish: below -0.25% and above -2.00%
+  - Bearish: -2.00% or lower
+- Overall F&O sentiment is a weighted breadth score: Bullish stocks count +2, Mild Bullish +1, Mild Bearish -1, Bearish -2, and Neutral 0. It is a breadth summary, not a predictive signal.
+- Nifty 50 live snapshot and available NSE sector-index snapshots are requested with the F&O stock quotes through Kite's quote endpoint.
+- Top sector is the strongest available mapped NSE sector index by daily percentage change.
+- Stock labels use the published Nifty 500 constituent Industry classification. F&O stocks not present in that classification are marked Other F&O. Classification is cached and refreshed monthly; failures are put on a 12-hour cooldown.
+- Additional opportunity: **5Y HIGH +2% + 3X** means LTP within 5% below the available five-year highest daily high, daily change at least +2%, and volume at least 3× the average cumulative volume at the same time over the previous 20 sessions. This is not a verified lifetime ATH condition.
