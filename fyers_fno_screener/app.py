@@ -1268,6 +1268,28 @@ def status():
         })
 
 
+
+@app.route('/api/test-telegram')
+def test_telegram_alert():
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
+    chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
+    if not bot_token or not chat_id:
+        return jsonify({'ok': False, 'error': 'Telegram credentials are not configured in Render.'}), 503
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={'chat_id': chat_id, 'text': '✅ F&O Scanner Telegram test successful. Fresh and Strong Momentum alerts are configured.', 'disable_web_page_preview': True},
+            timeout=8,
+        )
+        payload = response.json()
+        if response.status_code != 200 or not payload.get('ok'):
+            app.logger.warning('Telegram test failed: HTTP %s', response.status_code)
+            return jsonify({'ok': False, 'error': 'Telegram rejected the test message. Check bot token and chat ID.'}), 502
+        return jsonify({'ok': True, 'message': 'Telegram test message sent.'})
+    except requests.RequestException:
+        return jsonify({'ok': False, 'error': 'Could not reach Telegram API. Try again.'}), 502
+
+
 @app.route('/api/universe')
 def universe():
     try:
