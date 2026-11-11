@@ -143,3 +143,81 @@ tbody tr:hover{background:#18283a}
  .history-status{display:flex;flex-wrap:wrap;align-items:flex-start}
  .storage-note{width:100%;margin:0 0 0 13px;text-align:left;font-size:8px}
 }
+
+/* Oldpal Dashboard market pulse and sentiment */
+.market-pulse{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:9px}
+.pulse-card{min-width:0;background:linear-gradient(140deg,#14243a,#101b2a);border:1px solid #2b405a;border-radius:12px;padding:11px 14px;display:flex;flex-direction:column;gap:4px}
+.pulse-label{color:#92a9c4;font-size:9px;font-weight:850;letter-spacing:1px}
+.pulse-card strong{font-size:21px;line-height:1.1;font-variant-numeric:tabular-nums}
+.pulse-card small{color:#90a4bd;font-size:10px;line-height:1.3}
+.sentiment-pulse .sentiment-value{font-size:19px}
+.sentiment-value.sentiment-bullish{color:#49d6a0}
+.sentiment-value.sentiment-mild-bullish{color:#9be0bf}
+.sentiment-value.sentiment-neutral{color:#b8c2d0}
+.sentiment-value.sentiment-mild-bearish{color:#e7b78d}
+.sentiment-value.sentiment-bearish{color:#ff8790}
+.sentiment-panel{background:#101a28;border:1px solid #26374d;border-radius:11px;margin-bottom:9px;padding:9px 12px}
+.sentiment-heading{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:7px;font-size:10px}
+.sentiment-heading span{color:#8fa3bc;font-size:9px}
+.sentiment-counts{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+.sentiment-chip{display:flex;justify-content:space-between;gap:6px;align-items:center;padding:6px 9px;border-radius:7px;font-size:9px}
+.sentiment-chip b{font-size:12px;font-variant-numeric:tabular-nums}
+.sentiment-chip.bull{background:#12382f;color:#63e1ad}
+.sentiment-chip.mild-bull{background:#17372f;color:#a4ddb9}
+.sentiment-chip.neutral{background:#263342;color:#c5ceda}
+.sentiment-chip.mild-bear{background:#3a3029;color:#e8bd99}
+.sentiment-chip.bear{background:#40272e;color:#ff9299}
+.metrics{grid-template-columns:repeat(5,minmax(0,1fr))}
+.metric-highlight{border-color:#6a572d;background:linear-gradient(140deg,#2b281d,#151d27)}
+.metric-highlight strong{color:#ffda8e}
+.stock-meta{color:#8da3bd;font-size:9px;line-height:1.25;margin-top:3px}
+.stock-sentiment{display:flex;justify-content:space-between;align-items:center;margin-top:5px;font-size:9px}
+.sentiment-tag{display:inline-block;padding:3px 6px;border-radius:5px;font-size:8px;line-height:1.1;font-weight:850;white-space:nowrap}
+.sentiment-bullish{background:#12382f;color:#63e1ad}
+.sentiment-mild-bullish{background:#18362f;color:#a4ddb9}
+.sentiment-neutral{background:#263342;color:#c5ceda}
+.sentiment-mild-bearish{background:#3a3029;color:#e8bd99}
+.sentiment-bearish{background:#40272e;color:#ff9299}
+.tag-combo{background:#51401d;color:#ffe09a;border:1px solid #80652d}
+.stock-cell .stock-meta{margin-top:3px}
+.stock-cell .tags{margin-top:4px}
+@media(max-width:900px){
+ .metrics{grid-template-columns:repeat(5,minmax(0,1fr))}
+ .pulse-card{padding:9px 10px}
+ .pulse-card strong{font-size:18px}
+}
+@media(max-width:760px){
+ .market-pulse{grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-bottom:6px}
+ .pulse-card{padding:7px 6px;border-radius:8px;gap:3px}
+ .pulse-label{font-size:7px;letter-spacing:.5px;line-height:1.15;min-height:16px}
+ .pulse-card strong{font-size:14px;line-height:1.05;overflow-wrap:anywhere}
+ .pulse-card small{font-size:7px;line-height:1.15}
+ .sentiment-panel{padding:7px;margin-bottom:6px;border-radius:8px}
+ .sentiment-heading{font-size:8px;margin-bottom:5px}
+ .sentiment-heading span{font-size:7px}
+ .sentiment-counts{gap:3px}
+ .sentiment-chip{flex-direction:column;justify-content:center;gap:2px;padding:4px 2px;text-align:center;border-radius:5px}
+ .sentiment-chip span{font-size:6.5px;white-space:nowrap}
+ .sentiment-chip b{font-size:10px}
+ .metrics{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}
+ .metric{min-height:58px;padding:6px 4px}
+ .metric span{font-size:7px;min-height:15px}
+ .metric strong{font-size:15px}
+ .metric small{font-size:6px}
+ .rule-strip>div{flex-basis:78%}
+ .toolbar{grid-template-columns:1fr 1fr}
+ .toolbar input{grid-column:1/-1}
+ .toolbar select{min-width:0;font-size:9px}
+ .mobile-rows{grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:6px}
+ .stock-card{padding:6px;border-radius:7px}
+ .stock-top b{font-size:9px}
+ .stock-top strong{font-size:10px}
+ .stock-meta{font-size:7px;margin-top:2px}
+ .stock-card-tags{display:flex;flex-wrap:wrap;gap:3px;margin-top:4px}
+ .stock-card-tags .tag{font-size:6px;padding:2px 3px}
+ .stock-sentiment{margin-top:4px;font-size:8px}
+ .stock-sentiment .sentiment-tag{font-size:6px;padding:2px 4px}
+ .stock-stats{margin-top:5px;gap:3px}
+ .stock-stats span{font-size:6.5px}
+ .stock-stats b{font-size:7px}
+}
