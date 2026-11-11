@@ -1137,6 +1137,28 @@ def scan():
         return jsonify({'error': str(exc), 'rows': []}), 400
 
 
+
+@app.route('/api/chart/<symbol>')
+def chart_data(symbol):
+    symbol = symbol.upper().strip()
+    if symbol not in cache['symbols']:
+        return jsonify({'error': 'Unknown F&O symbol'}), 404
+    interval = request.args.get('interval', '5')
+    if interval not in {'1', '5', '15', '60'}:
+        return jsonify({'error': 'Unsupported interval'}), 400
+    candles = cache['intraday'].get(symbol, [])
+    if not candles:
+        return jsonify({'candles': [], 'message': 'Intraday history is still loading. Please try again shortly.'})
+    if interval in {'15', '60'}:
+        step = int(interval); grouped = {}
+        for c in candles:
+            bucket = int(c[0]) - int(c[0]) % (step * 60)
+            if bucket not in grouped: grouped[bucket] = [bucket,c[1],c[2],c[3],c[4],c[5]]
+            else:
+                g=grouped[bucket];g[2]=max(g[2],c[2]);g[3]=min(g[3],c[3]);g[4]=c[4];g[5]+=c[5]
+        candles=[grouped[k] for k in sorted(grouped)]
+    return jsonify({'candles': candles, 'interval': interval})
+
 @app.route('/manifest.webmanifest')
 def manifest():
     return jsonify({

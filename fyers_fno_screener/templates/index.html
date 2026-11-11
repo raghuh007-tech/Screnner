@@ -10,7 +10,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <title>Oldpal Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css?v=8">
+  <link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
 <div class="shell">
@@ -60,7 +60,7 @@
   </section>
 
   <section class="toolbar">
-    <input id="search" type="search" placeholder="Search F&O stock or sector…" autocomplete="off">
+    
     <select id="signalFilter">
       <option value="all">All signals</option>
       <option value="PDH BREAKOUT">PDH breakout</option>
@@ -68,12 +68,6 @@
       <option value="NEAR 5Y HIGH">Near 5Y high</option>
       <option value="5Y HIGH +2% + 3X">5Y high +2% + 3X</option>
       <option value="multiple">Multiple signals</option>
-    </select>
-    <select id="sentimentFilter">
-      <option value="all">All sentiment</option>
-      <option value="Bullish">Bullish</option>
-      <option value="Neutral">Neutral</option>
-      <option value="Bearish">Bearish</option>
     </select>
     <select id="sort">
       <option value="signal_count">Sort: strongest signals</option>
@@ -106,6 +100,12 @@
     Scanner only. No orders are placed. Sentiment is based only on the NSE F&O stock universe. The internal near-high condition uses available five-year daily highs, not a verified lifetime ATH. Sector leaders are ranked by available NSE sector-index daily percentage change. Stock sectors use the Nifty 500 industry classification; F&O stocks outside it are labelled Other F&O.
   </footer>
 </div>
-<script src="/static/app.js?v=7"></script>
+
+<div id="chartModal" class="chart-modal" aria-hidden="true"><section class="chart-dialog">
+<div class="chart-head"><div><b id="chartSymbol">STOCK</b><small id="chartQuote">Intraday chart · EMA 10 / EMA 20</small></div><button id="closeChart" type="button">Close ✕</button></div>
+<div class="chart-timeframes"><button data-tf="1" type="button">1m</button><button class="active" data-tf="5" type="button">5m</button><button data-tf="15" type="button">15m</button><button data-tf="60" type="button">1h</button></div>
+<div id="stockChart" class="stock-chart"></div><div class="chart-legend"><span class="ema10">EMA 10</span><span class="ema20">EMA 20</span></div><div id="chartMessage" class="chart-message">Loading candles…</div>
+</section></div>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=8"></script>
 </body>
 </html>

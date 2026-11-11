@@ -49,13 +49,9 @@ async function updateStatus() {
   }
 }
 function filteredRows() {
-  const query = $('search').value.trim().toUpperCase();
   const filter = $('signalFilter').value;
-  const sentimentFilter = $('sentimentFilter').value;
   const sort = $('sort').value;
   const result = rows.filter(row => {
-    if (query && !row.symbol.toUpperCase().includes(query) && !(row.sector || '').toUpperCase().includes(query)) return false;
-    if (sentimentFilter !== 'all' && row.sentiment !== sentimentFilter) return false;
     if (filter === 'multiple' && row.signals.length < 2) return false;
     if (filter !== 'all' && filter !== 'multiple' && !row.signals.includes(filter)) return false;
     return true;
@@ -102,18 +98,7 @@ function render() {
 
   $('mobileRows').innerHTML = matches.length ? matches.map(row => {
     const changeClass = Number(row.change_pct) >= 0 ? 'positive' : 'negative';
-    return `<article class="stock-card">
-      <div class="stock-top"><b>${esc(row.symbol)}</b><strong>${fmt(row.ltp)}</strong></div>
-      <div class="stock-meta">${esc(row.sector || 'Sector unavailable')}</div>
-      <div class="stock-card-tags">${badges(row.signals)}</div>
-      <div class="stock-sentiment"><span class="sentiment-tag ${sentimentClass(row.sentiment)}">${esc(row.sentiment || 'Neutral')}</span><span class="${changeClass}">${formatChange(row.change_pct)}</span></div>
-      <div class="stock-stats">
-        <span>Volume <b>${row.volume_ratio == null ? '—' : fmt(row.volume_ratio)+'×'}</b></span>
-        <span>Day vol <b>${fmt(row.volume,0)}</b></span>
-        <span>PDH <b>${fmt(row.prev_day_high)}</b></span>
-        <span>5Y high gap <b>${highGap(row)}</b></span>
-      </div>
-    </article>`;
+    return `<button type="button" class="stock-row" data-symbol="${esc(row.symbol)}"><span class="stock-row-name">${esc(row.symbol)}</span><span class="stock-row-signals">${badges(row.signals)}</span><span class="stock-row-price">${fmt(row.ltp)}</span><span class="stock-row-change ${changeClass}">${formatChange(row.change_pct)}</span><span class="row-chevron">›</span></button>`;
   }).join('') : '<div class="empty">No stocks currently match these filters.</div>';
 }
 function renderMarketContext(context) {
@@ -175,9 +160,7 @@ async function refresh() {
     $('refresh').disabled = false;
   }
 }
-$('search').addEventListener('input', render);
 $('signalFilter').addEventListener('change', render);
-$('sentimentFilter').addEventListener('change', render);
 $('sort').addEventListener('change', render);
 $('refresh').addEventListener('click', refresh);
 (async () => {
@@ -189,3 +172,26 @@ $('refresh').addEventListener('click', refresh);
   refreshTimer = setInterval(refresh, 20000);
   setInterval(updateStatus, 30000);
 })();
+
+let chartInstance=null, activeChartSymbol='', activeTimeframe='5';
+function calcEma(points,n){let prev=null,k=2/(n+1);return points.map(p=>{prev=prev===null?p.value:p.value*k+prev*(1-k);return {time:p.time,value:prev};});}
+function closeChart(){document.getElementById('chartModal').classList.remove('open');if(chartInstance){chartInstance.remove();chartInstance=null;}}
+document.getElementById('closeChart').addEventListener('click',closeChart);
+document.getElementById('chartModal').addEventListener('click',e=>{if(e.target.id==='chartModal')closeChart();});
+document.getElementById('mobileRows').addEventListener('click',e=>{let r=e.target.closest('.stock-row');if(r)openChart(r.dataset.symbol);});
+document.querySelectorAll('.chart-timeframes button').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.chart-timeframes button').forEach(x=>x.classList.toggle('active',x===b));activeTimeframe=b.dataset.tf;openChart(activeChartSymbol);}));
+async function openChart(symbol){
+ activeChartSymbol=symbol;document.getElementById('chartSymbol').textContent=symbol;document.getElementById('chartModal').classList.add('open');document.getElementById('chartMessage').textContent='Loading candles…';
+ if(chartInstance){chartInstance.remove();chartInstance=null;}
+ try{
+  let d=await api(`/api/chart/${encodeURIComponent(symbol)}?interval=${activeTimeframe}`), cs=(d.candles||[]).map(c=>({time:Math.floor(c[0]),open:c[1],high:c[2],low:c[3],close:c[4]}));
+  if(!cs.length){document.getElementById('chartMessage').textContent=d.message||'Intraday candles not available yet.';return;}
+  let el=document.getElementById('stockChart');
+  chartInstance=LightweightCharts.createChart(el,{width:el.clientWidth,height:el.clientHeight,layout:{background:{color:'#101a28'},textColor:'#a9bad0'},grid:{vertLines:{color:'#1d2b3d'},horzLines:{color:'#1d2b3d'}},timeScale:{timeVisible:true}});
+  let candle=chartInstance.addCandlestickSeries({upColor:'#35c99a',downColor:'#f16f7a',borderVisible:false,wickUpColor:'#35c99a',wickDownColor:'#f16f7a'});candle.setData(cs);
+  let closes=cs.map(c=>({time:c.time,value:c.close}));
+  let e10=chartInstance.addLineSeries({color:'#f5c451',lineWidth:2});e10.setData(calcEma(closes,10));
+  let e20=chartInstance.addLineSeries({color:'#65a9ff',lineWidth:2});e20.setData(calcEma(closes,20));
+  chartInstance.timeScale().fitContent();document.getElementById('chartMessage').textContent='EMA 10 · EMA 20';
+ }catch(e){document.getElementById('chartMessage').textContent=e.message;}
+}
