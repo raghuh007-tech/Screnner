@@ -15,9 +15,7 @@ async function api(url) {
 function sentimentClass(value) {
   return ({
     'Bullish':'sentiment-bullish',
-    'Mild Bullish':'sentiment-mild-bullish',
     'Neutral':'sentiment-neutral',
-    'Mild Bearish':'sentiment-mild-bearish',
     'Bearish':'sentiment-bearish',
     'Unavailable':'sentiment-neutral'
   })[value] || 'sentiment-neutral';
@@ -139,17 +137,11 @@ function renderSentiment(data) {
   const overallEl = $('overallSentiment');
   overallEl.textContent = overall;
   overallEl.className = `sentiment-value ${sentimentClass(overall)}`;
-  $('sentimentScore').textContent = sentiment.score == null
-    ? 'Market breadth score unavailable'
-    : `F&O breadth score: ${(Number(sentiment.score) * 100).toFixed(0)} · ${sentiment.valid_stocks} stocks`;
 
   const counts = sentiment.counts || {};
-  $('bullishCount').textContent = fmt(counts['Bullish'] || 0,0);
-  $('mildBullishCount').textContent = fmt(counts['Mild Bullish'] || 0,0);
-  $('neutralCount').textContent = fmt(counts['Neutral'] || 0,0);
-  $('mildBearishCount').textContent = fmt(counts['Mild Bearish'] || 0,0);
-  $('bearishCount').textContent = fmt(counts['Bearish'] || 0,0);
-  $('sentimentCoverage').textContent = `${sentiment.valid_stocks || 0} of F&O stocks classified`;
+  $('sentimentScore').textContent = sentiment.valid_stocks
+    ? `${fmt(counts['Bullish'] || 0,0)} Bullish · ${fmt(counts['Neutral'] || 0,0)} Neutral · ${fmt(counts['Bearish'] || 0,0)} Bearish · ${fmt(sentiment.valid_stocks,0)} F&O stocks`
+    : 'Waiting for NSE F&O stock breadth';
 }
 async function refresh() {
   $('feed').textContent = 'Scanning…';

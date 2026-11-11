@@ -832,25 +832,18 @@ def volume_ratio_for_time(candles, now=None):
 
 
 def classify_sentiment(change_pct):
-    """Daily-return bands for the NSE F&O stock universe."""
+    """Three daily-return bands for every NSE F&O stock."""
     if change_pct is None:
         return 'Neutral'
-    if change_pct >= 2.0:
-        return 'Bullish'
     if change_pct > 0.25:
-        return 'Mild Bullish'
-    if change_pct <= -2.0:
-        return 'Bearish'
+        return 'Bullish'
     if change_pct < -0.25:
-        return 'Mild Bearish'
+        return 'Bearish'
     return 'Neutral'
 
 
 def summarize_sentiment(quotes):
-    counts = {
-        'Bullish': 0, 'Mild Bullish': 0, 'Neutral': 0,
-        'Mild Bearish': 0, 'Bearish': 0,
-    }
+    counts = {'Bullish': 0, 'Neutral': 0, 'Bearish': 0}
     valid = 0
     for quote in quotes.values():
         change = quote.get('chp')
@@ -867,18 +860,12 @@ def summarize_sentiment(quotes):
         overall = 'Unavailable'
         score = None
     else:
-        score = (
-            2 * counts['Bullish'] + counts['Mild Bullish']
-            - counts['Mild Bearish'] - 2 * counts['Bearish']
-        ) / (2 * valid)
-        if score >= 0.30:
+        # Net breadth: bullish share minus bearish share of all classified F&O stocks.
+        score = (counts['Bullish'] - counts['Bearish']) / valid
+        if score >= 0.10:
             overall = 'Bullish'
-        elif score >= 0.10:
-            overall = 'Mild Bullish'
-        elif score <= -0.30:
-            overall = 'Bearish'
         elif score <= -0.10:
-            overall = 'Mild Bearish'
+            overall = 'Bearish'
         else:
             overall = 'Neutral'
     return {'overall': overall, 'score': score, 'counts': counts, 'valid_stocks': valid}

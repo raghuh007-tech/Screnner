@@ -10,7 +10,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <title>Oldpal Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css?v=6">
+  <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
 <div class="shell">
@@ -34,7 +34,7 @@
       <small id="niftyChange">Waiting for index quote</small>
     </article>
     <article class="pulse-card sentiment-pulse">
-      <span class="pulse-label">F&O MARKET SENTIMENT</span>
+      <span class="pulse-label">NIFTY F&O SENTIMENT</span>
       <strong id="overallSentiment" class="sentiment-value">—</strong>
       <small id="sentimentScore">Based on NSE F&O stock breadth</small>
     </article>
@@ -43,20 +43,6 @@
       <strong id="topSector">—</strong>
       <small id="topSectorChange">Waiting for sector index quotes</small>
     </article>
-  </section>
-
-  <section class="sentiment-panel">
-    <div class="sentiment-heading">
-      <b>F&O stock sentiment distribution</b>
-      <span id="sentimentCoverage">— stocks classified</span>
-    </div>
-    <div class="sentiment-counts">
-      <div class="sentiment-chip bull"><span>Bullish</span><b id="bullishCount">0</b></div>
-      <div class="sentiment-chip mild-bull"><span>Mild bullish</span><b id="mildBullishCount">0</b></div>
-      <div class="sentiment-chip neutral"><span>Neutral</span><b id="neutralCount">0</b></div>
-      <div class="sentiment-chip mild-bear"><span>Mild bearish</span><b id="mildBearishCount">0</b></div>
-      <div class="sentiment-chip bear"><span>Bearish</span><b id="bearishCount">0</b></div>
-    </div>
   </section>
 
   <section class="metrics">
@@ -86,9 +72,7 @@
     <select id="sentimentFilter">
       <option value="all">All sentiment</option>
       <option value="Bullish">Bullish</option>
-      <option value="Mild Bullish">Mild bullish</option>
       <option value="Neutral">Neutral</option>
-      <option value="Mild Bearish">Mild bearish</option>
       <option value="Bearish">Bearish</option>
     </select>
     <select id="sort">
@@ -122,6 +106,6 @@
     Scanner only. No orders are placed. Sentiment is based only on the NSE F&O stock universe. The internal near-high condition uses available five-year daily highs, not a verified lifetime ATH. Sector leaders are ranked by available NSE sector-index daily percentage change. Stock sectors use the Nifty 500 industry classification; F&O stocks outside it are labelled Other F&O.
   </footer>
 </div>
-<script src="/static/app.js?v=6"></script>
+<script src="/static/app.js?v=7"></script>
 </body>
 </html>
