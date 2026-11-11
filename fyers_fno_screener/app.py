@@ -92,6 +92,8 @@ cache = {
     'sector_error': None,
 }
 lock = threading.RLock()
+# Per-process one-minute price snapshots used for live 5-minute momentum detection.
+momentum_snapshots = {}
 
 # Historical candle cache. Use /var/data on a Render service with a
 # persistent disk; the default local path is only durable for the life of
@@ -957,6 +959,60 @@ def build_top_gainers(quotes, symbols, now):
     gainers.sort(key=lambda row: row['change_pct'], reverse=True)
     return gainers[:10]
 
+
+def build_momentum_lists(quotes, symbols, now):
+    """Track rolling one-minute LTP snapshots; rank fresh and sustained 5m momentum."""
+    current_ts = now.timestamp()
+    fresh, strongest = [], []
+    for symbol in symbols:
+        quote = quotes.get(symbol)
+        if not quote:
+            continue
+        try:
+            ltp = float(quote.get('lp'))
+            daily_change = float(quote.get('chp'))
+            day_volume = float(quote.get('volume') or 0)
+        except (TypeError, ValueError):
+            continue
+        if ltp <= 0:
+            continue
+        history = momentum_snapshots.setdefault(symbol, deque(maxlen=12))
+        if not history or current_ts - history[-1][0] >= 45:
+            history.append((current_ts, ltp))
+        # Need a full five-minute observation window before emitting a signal.
+        past = next(((ts, price) for ts, price in reversed(history) if current_ts - ts >= 240), None)
+        if not past:
+            continue
+        move_5m = (ltp / past[1] - 1) * 100
+        if move_5m <= 0:
+            continue
+        with lock:
+            intraday = cache['intraday'].get(symbol) or []
+            daily = cache['daily'].get(symbol) or {}
+        avg_same_time, _, _ = volume_ratio_for_time(intraday, now)
+        volume_ratio = day_volume / avg_same_time if avg_same_time and avg_same_time > 0 else None
+        prev_high = daily.get('prev_day_high')
+        confirmations = []
+        if move_5m >= 0.50: confirmations.append('5m surge')
+        if daily_change >= 1.0: confirmations.append('Daily green')
+        if volume_ratio is not None and volume_ratio >= 1.5: confirmations.append('Volume')
+        if prev_high is not None and ltp > prev_high: confirmations.append('PDH')
+        item = {
+            'symbol': symbol.replace('NSE:', '').replace('-EQ', ''),
+            'change_pct': daily_change, 'move_5m': move_5m,
+            'volume_ratio': volume_ratio, 'confirmations': confirmations,
+            'confirmation_count': len(confirmations),
+            'level': 'strong' if len(confirmations) >= 3 else 'developing' if len(confirmations) == 2 else 'early',
+        }
+        strongest.append(item)
+        # Fresh = a meaningful 5-minute rise, with at least two independent checks.
+        if move_5m >= 0.50 and len(confirmations) >= 2:
+            fresh.append(item)
+    strongest.sort(key=lambda x: (x['move_5m'], x['confirmation_count']), reverse=True)
+    fresh.sort(key=lambda x: (x['move_5m'], x['confirmation_count']), reverse=True)
+    return {'fresh_momentum': fresh[:8], 'strongest_momentum': strongest[:8]}
+
+
 def build_scan_row(symbol, quote, now=None):
     now = now or datetime.now(IST)
     ltp = quote.get('lp')
@@ -1202,10 +1258,12 @@ def scan():
             history_running = cache['history_running']
         sentiments = summarize_sentiment(quotes)
         top_gainers = build_top_gainers(quotes, symbols, now)
+        momentum = build_momentum_lists(quotes, symbols, now)
         context = market_context()
         return jsonify({
             'rows': rows,
             'top_gainers': top_gainers,
+            'momentum': momentum,
             'coverage': len(quotes),
             'quote_volume_nonzero': sum(1 for quote in quotes.values() if quote.get('volume') not in (None, 0)),
             'universe': len(symbols),
