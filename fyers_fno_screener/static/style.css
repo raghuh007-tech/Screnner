@@ -135,3 +135,11 @@ tbody tr:hover{background:#18283a}
 .ath-reference{color:#9fcbff;text-decoration:none;font-weight:750;white-space:nowrap}
 .ath-reference:hover{text-decoration:underline;color:#c4e0ff}
 @media(max-width:760px){.ath-reference{display:inline-block;margin-top:3px}}
+
+.storage-note{margin-left:auto;font-size:9px;line-height:1.35;text-align:right;color:#ffcf82}
+.storage-note.storage-warning{color:#ffcf82}
+.storage-note.storage-ok{color:#49d6a0}
+@media(max-width:760px){
+ .history-status{display:flex;flex-wrap:wrap;align-items:flex-start}
+ .storage-note{width:100%;margin:0 0 0 13px;text-align:left;font-size:8px}
+}
