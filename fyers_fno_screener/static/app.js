@@ -57,7 +57,7 @@ function filteredRows() {
     return true;
   });
   result.sort((a,b) => {
-    if (sort === 'ath_distance_pct') return (a.ath_distance_pct ?? 999) - (b.ath_distance_pct ?? 999);
+    if (sort === 'week52_distance_pct') return (a.week52_distance_pct ?? a.ath_distance_pct ?? 999) - (b.week52_distance_pct ?? b.ath_distance_pct ?? 999);
     return Number(b[sort] ?? -999999) - Number(a[sort] ?? -999999);
   });
   return result;
@@ -101,6 +101,17 @@ function render() {
     return `<button type="button" class="stock-row" data-symbol="${esc(row.symbol)}"><span class="stock-row-name">${esc(row.symbol)}</span><span class="stock-row-signals">${badges(row.signals)}</span><span class="stock-row-price">${fmt(row.ltp)}</span><span class="stock-row-change ${changeClass}">${formatChange(row.change_pct)}</span><span class="row-chevron">›</span></button>`;
   }).join('') : '<div class="empty">No stocks currently match these filters.</div>';
 }
+function renderTopGainers(gainers) {
+  const host = $('gainersRows'); if (!host) return;
+  const list = gainers || [];
+  host.innerHTML = list.length ? list.map((row, index) => {
+    const level = row.confirmation_level || 'none';
+    const label = level === 'strong' ? 'STRONG' : level === 'moderate' ? 'MODERATE' : level === 'limited' ? 'LIMITED' : 'NO CONFIRMATION';
+    const signals = (row.confirmations || []).map(esc).join(' · ') || 'No additional confirmation';
+    return '<div class="gainer-row confirm-' + level + '"><b class="gainer-rank">' + (index+1) + '</b><b class="gainer-symbol">' + esc(row.symbol) + '</b><span class="gainer-change positive">+' + fmt(row.change_pct) + '%</span><span class="gainer-level">' + label + ' · ' + (row.confirmation_count || 0) + '/4</span><small class="gainer-signals">' + signals + '</small></div>';
+  }).join('') : '<div class="empty">No positive F&O gainers available yet.</div>';
+}
+
 function renderMarketContext(context) {
   const nifty = context?.nifty50 || {};
   $('niftyPrice').textContent = fmt(nifty.price);
@@ -134,6 +145,7 @@ async function refresh() {
   try {
     const data = await api('/api/scan');
     rows = data.rows || [];
+    renderTopGainers(data.top_gainers || []);
     $('universe').textContent = fmt(data.universe,0);
     $('pdhCount').textContent = fmt(data.pd_breakouts,0);
     $('momentumCount').textContent = fmt(data.momentum,0);
@@ -149,7 +161,7 @@ async function refresh() {
     $('historyText').textContent = data.history_running
       ? `Loading/updating history: ${data.history_ready}/${data.universe} stocks ready. Historical calls are limited to initial backfill or daily updates.`
       : `Historical cache ready for ${data.history_ready}/${data.universe} stocks.`;
-    $('subhead').textContent = `${data.matched} matching stocks · ${data.market_time} · auto-refresh every 20 seconds`;
+    $('subhead').textContent = `${data.matched} matching stocks · ${data.market_time} · auto-refresh every 60 seconds`;
     render();
   } catch (error) {
     $('feed').textContent = error.message;
