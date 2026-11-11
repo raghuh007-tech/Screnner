@@ -88,7 +88,7 @@ cache = {
     'history_total': 0, 'history_running': False, 'history_message': 'Waiting for broker connection',
     'connected': bool(TOKEN), 'last_quote_count': 0,
     'market_quotes': {}, 'market_index_symbols': [], 'sector_index_labels': {},
-    'stock_sectors': {}, 'sector_updated_at': None, 'sector_refresh_running': False,
+    'stock_sectors': {}, 'sector_updated_at': None, 'sector_retry_after': None, 'sector_refresh_running': False,
     'sector_error': None,
 }
 lock = threading.RLock()
@@ -181,6 +181,8 @@ def init_history_store():
         for key, value in app_meta_rows:
             if key == 'sector_updated_at':
                 cache['sector_updated_at'] = value
+            elif key == 'sector_retry_after':
+                cache['sector_retry_after'] = value
 
         app.logger.info(
             'Historical cache loaded from %s: %d symbols with daily candles, %d with intraday candles',
@@ -370,6 +372,13 @@ def refresh_stock_sectors(symbols):
     if BROKER_PROVIDER != 'zerodha':
         return
     updated_at = cache.get('sector_updated_at')
+    retry_after = cache.get('sector_retry_after')
+    if retry_after:
+        try:
+            if datetime.fromisoformat(retry_after) > datetime.now(IST):
+                return
+        except ValueError:
+            pass
     missing = [symbol for symbol in symbols if symbol not in cache['stock_sectors']]
     refresh_due = not updated_at
     if updated_at:
@@ -420,11 +429,23 @@ def refresh_stock_sectors(symbols):
                 """, (timestamp,))
         cache['stock_sectors'].update(updates)
         cache['sector_updated_at'] = timestamp
+        cache['sector_retry_after'] = None
         cache['sector_error'] = None
         app.logger.info('Loaded sector classifications for %d F&O stocks from Nifty 500 constituent file', len(updates))
     except Exception as exc:
         cache['sector_error'] = str(exc)
-        app.logger.warning('Sector classification refresh failed: %s', exc)
+        retry_at = (datetime.now(IST) + timedelta(hours=12)).isoformat(timespec='seconds')
+        cache['sector_retry_after'] = retry_at
+        try:
+            with history_db_lock:
+                with _history_db_connect() as db:
+                    db.execute("""
+                        INSERT INTO app_meta(meta_key, meta_value) VALUES ('sector_retry_after', ?)
+                        ON CONFLICT(meta_key) DO UPDATE SET meta_value=excluded.meta_value
+                    """, (retry_at,))
+        except Exception as store_error:
+            app.logger.warning('Could not save sector retry cooldown: %s', store_error)
+        app.logger.warning('Sector classification refresh failed; retry after %s: %s', retry_at, exc)
         for symbol in symbols:
             cache['stock_sectors'].setdefault(symbol, 'Sector unavailable')
     finally:
@@ -1063,6 +1084,8 @@ def status():
             'history_cache_persistent_mount': (HISTORY_DB_PATH.startswith('/var/data/') and os.path.ismount('/var/data')),
             'history_cache_symbols': len(set(cache['daily']) & set(cache['intraday'])),
             'history_due_today': sum(1 for symbol in cache['symbols'] if history_due(symbol)),
+            'sector_error': cache['sector_error'],
+            'sector_updated_at': cache['sector_updated_at'],
             'quote_count': cache['last_quote_count'],
         })
 
