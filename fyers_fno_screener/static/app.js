@@ -159,7 +159,8 @@ async function refresh() {
   try {
     const data = await api('/api/scan');
     rows = data.rows || [];
-    renderTopGainers(data.top_gainers || []);\n    renderMomentum(data.momentum || {});
+    renderTopGainers(data.top_gainers || []);
+    renderMomentum(data.momentum || {});
     $('universe').textContent = fmt(data.universe,0);
     $('pdhCount').textContent = fmt(data.pd_breakouts,0);
     $('momentumCount').textContent = fmt(data.momentum,0);
