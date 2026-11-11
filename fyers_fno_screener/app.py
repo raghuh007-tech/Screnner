@@ -839,7 +839,7 @@ def classify_sentiment(change_pct):
         return 'Bullish'
     if change_pct > 0.25:
         return 'Mild Bullish'
-    if change_pct < -2.0:
+    if change_pct <= -2.0:
         return 'Bearish'
     if change_pct < -0.25:
         return 'Mild Bearish'
