@@ -60,11 +60,36 @@ FYERS_DATA_ROOT = FYERS_ROOT + '/data'
 IST = ZoneInfo('Asia/Kolkata')
 INDEX_NAMES = {'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50', 'SENSEX', 'BANKEX'}
 
+# Tradingsymbol -> display label for NSE sector indices present in Kite's daily instrument master.
+SECTOR_INDEX_LABELS = {
+    'NIFTY AUTO': 'Auto', 'NIFTY BANK': 'Bank', 'NIFTY REALTY': 'Realty',
+    'NIFTY INFRA': 'Infrastructure', 'NIFTY ENERGY': 'Energy', 'NIFTY FMCG': 'FMCG',
+    'NIFTY PHARMA': 'Pharma', 'NIFTY PSU BANK': 'PSU Bank', 'NIFTY PVT BANK': 'Private Bank',
+    'NIFTY PRIVATE BANK': 'Private Bank', 'NIFTY MEDIA': 'Media', 'NIFTY METAL': 'Metals',
+    'NIFTY FIN SERVICE': 'Financial Services', 'NIFTY FINANCIAL SERVICES': 'Financial Services',
+    'NIFTY IT': 'IT', 'NIFTY COMMODITIES': 'Commodities', 'NIFTY CONSUMPTION': 'Consumption',
+    'NIFTY HEALTHCARE': 'Healthcare', 'NIFTY CHEMICALS': 'Chemicals', 'NIFTY CEMENT': 'Cement',
+    'NIFTY CAPITAL GOODS': 'Capital Goods', 'NIFTY CONSUMER DURABLES': 'Consumer Durables',
+    'NIFTY CONSUMER SERVICES': 'Consumer Services', 'NIFTY OIL & GAS': 'Oil & Gas',
+    'NIFTY INSURANCE': 'Insurance', 'NIFTY NBFC': 'NBFC',
+    'NIFTY COMMERCIAL & TRANSPORT SERVICES': 'Commercial & Transport',
+    'NIFTY RETAIL': 'Retail', 'NIFTY TELECOMMUNICATIONS': 'Telecommunications',
+}
+NIFTY500_SECTOR_CSV = 'https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv'
+NIFTY500_SECTOR_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36',
+    'Referer': 'https://www.niftyindices.com/',
+    'Accept': 'text/csv,text/plain,*/*',
+}
+
 cache = {
     'symbols': [], 'quotes': {}, 'intraday': {}, 'daily': {}, 'instrument_tokens': {},
     'last_scan': 0, 'last_error': None, 'history_done': 0,
     'history_total': 0, 'history_running': False, 'history_message': 'Waiting for broker connection',
     'connected': bool(TOKEN), 'last_quote_count': 0,
+    'market_quotes': {}, 'market_index_symbols': [], 'sector_index_labels': {},
+    'stock_sectors': {}, 'sector_updated_at': None, 'sector_refresh_running': False,
+    'sector_error': None,
 }
 lock = threading.RLock()
 
@@ -108,11 +133,31 @@ def init_history_store():
                     last_error TEXT
                 )
             """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS stock_sector_cache (
+                    symbol TEXT PRIMARY KEY,
+                    sector TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS app_meta (
+                    meta_key TEXT PRIMARY KEY,
+                    meta_value TEXT NOT NULL
+                )
+            """)
             rows = db.execute(
                 "SELECT symbol, timeframe, candles_json FROM candle_cache"
             ).fetchall()
             meta_rows = db.execute(
                 "SELECT symbol, intraday_fetch_date, daily_fetch_date, retry_after, last_error FROM history_meta"
+            ).fetchall()
+            sector_rows = db.execute(
+                "SELECT symbol, sector FROM stock_sector_cache"
+            ).fetchall()
+            app_meta_rows = db.execute(
+                "SELECT meta_key, meta_value FROM app_meta"
             ).fetchall()
 
         for symbol, timeframe, candles_json in rows:
@@ -132,6 +177,10 @@ def init_history_store():
                 'retry_after': row[3],
                 'last_error': row[4],
             }
+        cache['stock_sectors'].update({symbol: sector for symbol, sector in sector_rows})
+        for key, value in app_meta_rows:
+            if key == 'sector_updated_at':
+                cache['sector_updated_at'] = value
 
         app.logger.info(
             'Historical cache loaded from %s: %d symbols with daily candles, %d with intraday candles',
@@ -312,6 +361,77 @@ def broker_get(path, params=None, priority=False):
 
 
 
+def _sector_symbol_key(value):
+    return re.sub(r'[^A-Z0-9]', '', (value or '').strip().upper())
+
+
+def refresh_stock_sectors(symbols):
+    """Refresh broad sector labels from Nifty 500's published constituent classification."""
+    if BROKER_PROVIDER != 'zerodha':
+        return
+    updated_at = cache.get('sector_updated_at')
+    missing = [symbol for symbol in symbols if symbol not in cache['stock_sectors']]
+    refresh_due = not updated_at
+    if updated_at:
+        try:
+            refresh_due = datetime.fromisoformat(updated_at) <= datetime.now(IST) - timedelta(days=30)
+        except ValueError:
+            refresh_due = True
+    if not refresh_due and not missing:
+        return
+
+    with lock:
+        if cache['sector_refresh_running']:
+            return
+        cache['sector_refresh_running'] = True
+    try:
+        response = requests.get(NIFTY500_SECTOR_CSV, headers=NIFTY500_SECTOR_HEADERS, timeout=30)
+        response.raise_for_status()
+        rows = csv.DictReader(io.StringIO(response.text))
+        mapping = {}
+        for row in rows:
+            key = _sector_symbol_key(row.get('Symbol'))
+            sector = (row.get('Industry') or '').strip()
+            if key and sector:
+                mapping[key] = sector
+        if not mapping:
+            raise RuntimeError('Nifty 500 sector file returned no symbol classifications.')
+
+        timestamp = datetime.now(IST).isoformat(timespec='seconds')
+        updates = {}
+        for symbol in symbols:
+            ticker = symbol.replace('NSE:', '').replace('-EQ', '')
+            # F&O stocks outside Nifty 500 are kept visible and clearly marked.
+            updates[symbol] = mapping.get(_sector_symbol_key(ticker), 'Other F&O')
+
+        with history_db_lock:
+            with _history_db_connect() as db:
+                db.executemany("""
+                    INSERT INTO stock_sector_cache(symbol, sector, source, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(symbol) DO UPDATE SET
+                        sector=excluded.sector,
+                        source=excluded.source,
+                        updated_at=excluded.updated_at
+                """, [(symbol, sector, 'Nifty 500 Industry', timestamp) for symbol, sector in updates.items()])
+                db.execute("""
+                    INSERT INTO app_meta(meta_key, meta_value) VALUES ('sector_updated_at', ?)
+                    ON CONFLICT(meta_key) DO UPDATE SET meta_value=excluded.meta_value
+                """, (timestamp,))
+        cache['stock_sectors'].update(updates)
+        cache['sector_updated_at'] = timestamp
+        cache['sector_error'] = None
+        app.logger.info('Loaded sector classifications for %d F&O stocks from Nifty 500 constituent file', len(updates))
+    except Exception as exc:
+        cache['sector_error'] = str(exc)
+        app.logger.warning('Sector classification refresh failed: %s', exc)
+        for symbol in symbols:
+            cache['stock_sectors'].setdefault(symbol, 'Sector unavailable')
+    finally:
+        with lock:
+            cache['sector_refresh_running'] = False
+
+
 def _normalise_symbol(name):
     name = (name or '').strip().upper()
     return f'NSE:{name}-EQ' if name else ''
@@ -358,7 +478,23 @@ def get_symbol_universe():
             for row in cash_rows
             if row.get('tradingsymbol') and row.get('instrument_token')
         }
+        index_names = {
+            row.get('tradingsymbol', '').strip().upper()
+            for row in rows
+            if row.get('exchange') == 'NSE' and row.get('segment') == 'INDICES'
+            and row.get('tradingsymbol')
+        }
+        sector_indices = {
+            f'NSE:{name}': SECTOR_INDEX_LABELS[name]
+            for name in index_names if name in SECTOR_INDEX_LABELS
+        }
+        if 'NIFTY 50' in index_names:
+            market_index_symbols = ['NSE:NIFTY 50'] + sorted(sector_indices)
+        else:
+            market_index_symbols = sorted(sector_indices)
         with lock:
+            cache['market_index_symbols'] = market_index_symbols
+            cache['sector_index_labels'] = sector_indices
             cache['instrument_tokens'] = {
                 _normalise_symbol(symbol): token_map[symbol]
                 for symbol in underlyings if symbol in token_map
@@ -422,18 +558,24 @@ def _normalise_kite_quote(symbol, item):
 
 
 def refresh_quotes(symbols):
-    """Fetch quote snapshots and normalise them into the common screener schema."""
+    """Fetch stock and index snapshots together, then keep their caches separate."""
     result = {}
+    market_result = {}
     if BROKER_PROVIDER == 'zerodha':
-        # Kite full-quote endpoint allows up to 500 instruments per request.
         kite_symbols = [symbol.replace('-EQ', '') for symbol in symbols]
-        for start in range(0, len(kite_symbols), 500):
-            batch = kite_symbols[start:start + 500]
+        with lock:
+            market_symbols = list(cache.get('market_index_symbols', []))
+        requested = kite_symbols + market_symbols
+        for start in range(0, len(requested), 500):
+            batch = requested[start:start + 500]
             params = [('i', symbol) for symbol in batch]
             payload = broker_get('/quote', params=params, priority=True)
             for key, item in (payload.get('data') or {}).items():
-                canonical = key + '-EQ'
-                result[canonical] = _normalise_kite_quote(canonical, item)
+                normalized = _normalise_kite_quote(key, item)
+                if key in market_symbols:
+                    market_result[key] = normalized
+                else:
+                    result[key + '-EQ'] = normalized
     else:
         for start in range(0, len(symbols), 50):
             batch = symbols[start:start + 50]
@@ -443,10 +585,43 @@ def refresh_quotes(symbols):
                     result[item.get('n', '')] = item.get('v', {})
     with lock:
         cache['quotes'].update(result)
+        cache['market_quotes'] = market_result
         cache['last_scan'] = time.time()
         cache['last_quote_count'] = len(result)
         cache['last_error'] = None
     return result
+
+
+def market_context():
+    """Summarise Nifty 50 and the best-performing available NSE sector index."""
+    with lock:
+        quotes = dict(cache.get('market_quotes', {}))
+        labels = dict(cache.get('sector_index_labels', {}))
+    nifty = quotes.get('NSE:NIFTY 50')
+    nifty_data = {
+        'price': nifty.get('lp') if nifty else None,
+        'change_pct': nifty.get('chp') if nifty else None,
+    }
+    sectors = []
+    for symbol, label in labels.items():
+        quote = quotes.get(symbol)
+        if not quote or quote.get('chp') is None:
+            continue
+        try:
+            sectors.append({
+                'name': label,
+                'change_pct': float(quote['chp']),
+                'symbol': symbol.replace('NSE:', ''),
+            })
+        except (TypeError, ValueError):
+            continue
+    sectors.sort(key=lambda item: item['change_pct'], reverse=True)
+    return {
+        'nifty50': nifty_data,
+        'top_sector': sectors[0] if sectors else None,
+        'sector_count': len(sectors),
+        'sectors': sectors,
+    }
 
 
 def _kite_timestamp_epoch(value):
@@ -635,6 +810,59 @@ def volume_ratio_for_time(candles, now=None):
     return average, cumulative[-1] if cumulative else None, len(cumulative)
 
 
+def classify_sentiment(change_pct):
+    """Daily-return bands for the NSE F&O stock universe."""
+    if change_pct is None:
+        return 'Neutral'
+    if change_pct >= 2.0:
+        return 'Bullish'
+    if change_pct > 0.25:
+        return 'Mild Bullish'
+    if change_pct < -2.0:
+        return 'Bearish'
+    if change_pct < -0.25:
+        return 'Mild Bearish'
+    return 'Neutral'
+
+
+def summarize_sentiment(quotes):
+    counts = {
+        'Bullish': 0, 'Mild Bullish': 0, 'Neutral': 0,
+        'Mild Bearish': 0, 'Bearish': 0,
+    }
+    valid = 0
+    for quote in quotes.values():
+        change = quote.get('chp')
+        if change is None:
+            continue
+        try:
+            sentiment = classify_sentiment(float(change))
+        except (TypeError, ValueError):
+            continue
+        counts[sentiment] += 1
+        valid += 1
+
+    if valid == 0:
+        overall = 'Unavailable'
+        score = None
+    else:
+        score = (
+            2 * counts['Bullish'] + counts['Mild Bullish']
+            - counts['Mild Bearish'] - 2 * counts['Bearish']
+        ) / (2 * valid)
+        if score >= 0.30:
+            overall = 'Bullish'
+        elif score >= 0.10:
+            overall = 'Mild Bullish'
+        elif score <= -0.30:
+            overall = 'Bearish'
+        elif score <= -0.10:
+            overall = 'Mild Bearish'
+        else:
+            overall = 'Neutral'
+    return {'overall': overall, 'score': score, 'counts': counts, 'valid_stocks': valid}
+
+
 def build_scan_row(symbol, quote, now=None):
     now = now or datetime.now(IST)
     ltp = quote.get('lp')
@@ -653,6 +881,7 @@ def build_scan_row(symbol, quote, now=None):
     with lock:
         intraday = cache['intraday'].get(symbol)
         daily = cache['daily'].get(symbol)
+        sector = cache['stock_sectors'].get(symbol, 'Sector unavailable')
 
     avg_same_time, _, sessions = volume_ratio_for_time(intraday or [], now)
     volume_ratio = day_volume / avg_same_time if avg_same_time and avg_same_time > 0 else None
@@ -674,6 +903,8 @@ def build_scan_row(symbol, quote, now=None):
     pdh_ok = prev_day_high is not None and ltp > prev_day_high and volume_ok
     gain_ok = change_pct is not None and change_pct >= 2.0 and volume_ok
     ath_ok = ath_distance is not None and ath_distance <= 3.0
+    ath_momentum_ok = ath_distance is not None and ath_distance <= 5.0 and change_pct is not None and change_pct >= 2.0 and volume_ok
+    sentiment = classify_sentiment(change_pct)
 
     signals = []
     if pdh_ok:
@@ -682,11 +913,15 @@ def build_scan_row(symbol, quote, now=None):
         signals.append('+2% MOMENTUM')
     if ath_ok:
         signals.append('NEAR 5Y HIGH')
+    if ath_momentum_ok:
+        signals.append('5Y HIGH +2% + 3X')
     if not signals:
         return None
 
     return {
         'symbol': symbol.replace('NSE:', '').replace('-EQ', ''),
+        'sector': sector,
+        'sentiment': sentiment,
         'ltp': ltp,
         'change_pct': change_pct,
         'volume': day_volume,
@@ -851,6 +1086,7 @@ def scan():
         if not cache['symbols']:
             cache['symbols'] = get_symbol_universe()
         symbols = cache['symbols']
+        refresh_stock_sectors(symbols)
         quotes = refresh_quotes(symbols)
         start_history_worker(symbols)
         now = datetime.now(IST)
@@ -866,6 +1102,8 @@ def scan():
         with lock:
             ready = sum(1 for symbol in symbols if symbol in cache['intraday'] and symbol in cache['daily'])
             history_running = cache['history_running']
+        sentiments = summarize_sentiment(quotes)
+        context = market_context()
         return jsonify({
             'rows': rows,
             'coverage': len(quotes),
@@ -875,6 +1113,10 @@ def scan():
             'pd_breakouts': sum('PDH BREAKOUT' in row['signals'] for row in rows),
             'momentum': sum('+2% MOMENTUM' in row['signals'] for row in rows),
             'near_ath': sum('NEAR 5Y HIGH' in row['signals'] for row in rows),
+            'ath_momentum': sum('5Y HIGH +2% + 3X' in row['signals'] for row in rows),
+            'sentiment': sentiments,
+            'market_context': context,
+            'sector_coverage': sum(1 for symbol in symbols if cache['stock_sectors'].get(symbol) not in (None, 'Sector unavailable')),
             'history_ready': ready,
             'history_running': history_running,
             'updated_at': now.isoformat(timespec='seconds'),
@@ -888,7 +1130,7 @@ def scan():
 @app.route('/manifest.webmanifest')
 def manifest():
     return jsonify({
-        'name': 'F&O Live Screener', 'short_name': 'F&O Screener', 'start_url': '/',
+        'name': 'Oldpal Dashboard', 'short_name': 'Oldpal', 'start_url': '/',
         'display': 'standalone', 'background_color': '#0b1018', 'theme_color': '#0b1018',
         'icons': [{'src': '/static/icon.svg', 'sizes': 'any', 'type': 'image/svg+xml', 'purpose': 'any'}]
     })
