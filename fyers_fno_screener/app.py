@@ -75,10 +75,10 @@ SECTOR_INDEX_LABELS = {
     'NIFTY COMMERCIAL & TRANSPORT SERVICES': 'Commercial & Transport',
     'NIFTY RETAIL': 'Retail', 'NIFTY TELECOMMUNICATIONS': 'Telecommunications',
 }
-NIFTY500_SECTOR_CSV = 'https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv'
+NIFTY500_SECTOR_CSV = 'https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv'
 NIFTY500_SECTOR_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36',
-    'Referer': 'https://www.niftyindices.com/',
+    'Referer': 'https://www.nseindia.com/',
     'Accept': 'text/csv,text/plain,*/*',
 }
 
