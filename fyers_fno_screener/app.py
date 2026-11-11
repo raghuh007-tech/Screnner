@@ -94,6 +94,8 @@ cache = {
 lock = threading.RLock()
 # Per-process one-minute price snapshots used for live 5-minute momentum detection.
 momentum_snapshots = {}
+telegram_alert_state = {'fresh': set(), 'strong': set()}
+telegram_alert_lock = threading.Lock()
 
 # Historical candle cache. Use /var/data on a Render service with a
 # persistent disk; the default local path is only durable for the life of
@@ -1013,6 +1015,50 @@ def build_momentum_lists(quotes, symbols, now):
     return {'fresh_momentum': fresh[:8], 'strongest_momentum': strongest[:8]}
 
 
+
+def send_telegram_momentum_alerts(momentum, now):
+    """Send one Telegram alert when a stock newly enters fresh/strong momentum."""
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
+    chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
+    if not bot_token or not chat_id:
+        return
+    fresh_rows = momentum.get('fresh_momentum', [])
+    strong_rows = [r for r in momentum.get('strongest_momentum', []) if r.get('level') == 'strong']
+    current = {
+        'fresh': {r['symbol']: r for r in fresh_rows},
+        'strong': {r['symbol']: r for r in strong_rows},
+    }
+    messages = []
+    with telegram_alert_lock:
+        for kind in ('fresh', 'strong'):
+            previous = telegram_alert_state[kind]
+            for symbol, row in current[kind].items():
+                if symbol in previous:
+                    continue
+                title = '⚡ FRESH MOMENTUM' if kind == 'fresh' else '🚀 STRONG MOMENTUM'
+                volume = f"{row['volume_ratio']:.1f}x" if row.get('volume_ratio') is not None else 'N/A'
+                checks = ', '.join(row.get('confirmations') or [])
+                messages.append(
+                    f"{title}\\n"
+                    f"{symbol} | 5m: +{row['move_5m']:.2f}% | Day: {row['change_pct']:+.2f}%\\n"
+                    f"Volume: {volume} | Confirmations: {checks}\\n"
+                    f"{now.strftime('%H:%M:%S IST')}\\n"
+                    f"https://fyers-fno-live-screener.onrender.com"
+                )
+            telegram_alert_state[kind] = set(current[kind])
+    for message in messages:
+        try:
+            response = requests.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={'chat_id': chat_id, 'text': message, 'disable_web_page_preview': True},
+                timeout=5,
+            )
+            if response.status_code != 200:
+                app.logger.warning('Telegram alert failed: HTTP %s', response.status_code)
+        except requests.RequestException as exc:
+            app.logger.warning('Telegram alert request failed: %s', exc)
+
+
 def build_scan_row(symbol, quote, now=None):
     now = now or datetime.now(IST)
     ltp = quote.get('lp')
@@ -1218,6 +1264,7 @@ def status():
             'sector_error': cache['sector_error'],
             'sector_updated_at': cache['sector_updated_at'],
             'quote_count': cache['last_quote_count'],
+            'telegram_configured': bool(os.getenv('TELEGRAM_BOT_TOKEN', '').strip() and os.getenv('TELEGRAM_CHAT_ID', '').strip()),
         })
 
 
@@ -1259,6 +1306,7 @@ def scan():
         sentiments = summarize_sentiment(quotes)
         top_gainers = build_top_gainers(quotes, symbols, now)
         momentum = build_momentum_lists(quotes, symbols, now)
+        send_telegram_momentum_alerts(momentum, now)
         context = market_context()
         return jsonify({
             'rows': rows,
