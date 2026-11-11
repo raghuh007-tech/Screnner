@@ -1,12 +1,13 @@
 # Oldpal Dashboard
 
-A private, mobile-first dashboard for NSE stock F&O underlyings. It combines three scanners into one duplicate-free list. It only reads market data and does not place orders.
+A private, mobile-first dashboard for NSE stock F&O underlyings. It combines multiple scanner conditions into one duplicate-free list. It only reads market data and does not place orders.
 
 ## Screening rules
 
 1. **PDH breakout:** LTP above the previous completed trading day's high, with volume at least 3× the average cumulative volume at the same time over the previous 20 sessions.
 2. **Daily momentum:** Daily change of at least +2.00% from the previous close, with the same 3× volume condition.
-3. **Near 5-year high:** LTP within 3.00% below the highest daily high in the available five-year data. This is not guaranteed to be a lifetime all-time high. The dashboard also links to Strota's separate full-history ATH screen as a reference. Strota defines its record as a split/bonus-adjusted highest daily close, uses live LTP during market hours, and lists stocks within 5% of that record.
+3. **Near 5-year high:** LTP within 3.00% below the highest daily high in the available five-year data. This is not guaranteed to be a lifetime all-time high. The dashboard links to Strota's separate full-history ATH screen as a reference.
+4. **High + momentum:** LTP within 5.00% below the available five-year highest daily high AND daily change at least +2.00% AND volume at least 3× average cumulative same-time volume. This is a five-year-high proxy, not verified lifetime ATH. Strota's separate record is based on split/bonus-adjusted highest daily close and live LTP; it is a cross-check, not an integrated signal.
 
 A stock appears once. All matching signals are grouped in its row/card.
 
