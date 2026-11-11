@@ -112,6 +112,20 @@ function renderTopGainers(gainers) {
   }).join('') : '<div class="empty">No positive F&O gainers available yet.</div>';
 }
 
+
+function renderMomentum(data) {
+  const draw = (id, items, freshMode) => {
+    const host = $(id); if (!host) return;
+    host.innerHTML = items?.length ? items.map((r,i) => {
+      const cls = r.level === 'strong' ? 'mom-strong' : r.level === 'developing' ? 'mom-developing' : 'mom-early';
+      const checks = (r.confirmations || []).map(esc).join(' · ');
+      return '<div class="momentum-row '+cls+'"><span class="mom-rank">'+(i+1)+'</span><b class="mom-symbol">'+esc(r.symbol)+'</b><span class="mom-daily">'+formatChange(r.change_pct)+'</span><strong class="mom-move">+'+fmt(r.move_5m)+'%</strong><span class="mom-checks">'+(checks || 'Building confirmations')+'</span></div>';
+    }).join('') : '<div class="empty">'+(freshMode ? 'No newly confirmed momentum yet.' : 'Waiting for positive 5-minute moves.')+'</div>';
+  };
+  draw('freshMomentum', data?.fresh_momentum, true);
+  draw('strongMomentum', data?.strongest_momentum, false);
+}
+
 function renderMarketContext(context) {
   const nifty = context?.nifty50 || {};
   $('niftyPrice').textContent = fmt(nifty.price);
@@ -145,7 +159,7 @@ async function refresh() {
   try {
     const data = await api('/api/scan');
     rows = data.rows || [];
-    renderTopGainers(data.top_gainers || []);
+    renderTopGainers(data.top_gainers || []);\n    renderMomentum(data.momentum || {});
     $('universe').textContent = fmt(data.universe,0);
     $('pdhCount').textContent = fmt(data.pd_breakouts,0);
     $('momentumCount').textContent = fmt(data.momentum,0);
