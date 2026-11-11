@@ -112,6 +112,54 @@ def _history_db_connect():
     return connection
 
 
+def summarize_daily_candles(candles, today=None):
+    """Keep only the previous completed session high and five-year ATH in RAM."""
+    today = today or datetime.now(IST).date()
+    latest_date = None
+    latest_high = None
+    ath = None
+    for candle in candles or []:
+        try:
+            if len(candle) < 6:
+                continue
+            candle_date = datetime.fromtimestamp(int(candle[0]), IST).date()
+            if candle_date >= today:
+                continue
+            high = float(candle[2])
+            ath = high if ath is None else max(ath, high)
+            if latest_date is None or candle_date > latest_date:
+                latest_date, latest_high = candle_date, high
+            elif candle_date == latest_date:
+                latest_high = max(latest_high, high)
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+    return {
+        'last_date': latest_date.isoformat() if latest_date else None,
+        'prev_day_high': latest_high,
+        'ath': ath,
+    }
+
+
+def merge_daily_summary(existing, recent, today=None):
+    today = today or datetime.now(IST).date()
+    updated = summarize_daily_candles(recent, today)
+    existing = existing or {}
+    ath_values = [v for v in (existing.get('ath'), updated.get('ath')) if v is not None]
+    if updated.get('last_date') and (
+        not existing.get('last_date') or updated['last_date'] >= existing['last_date']
+    ):
+        last_date = updated['last_date']
+        prev_day_high = updated.get('prev_day_high')
+    else:
+        last_date = existing.get('last_date')
+        prev_day_high = existing.get('prev_day_high')
+    return {
+        'last_date': last_date,
+        'prev_day_high': prev_day_high,
+        'ath': max(ath_values) if ath_values else None,
+    }
+
+
 def init_history_store():
     with history_db_lock:
         with _history_db_connect() as db:
@@ -174,7 +222,8 @@ def init_history_store():
                             continue
                     cache['intraday'][symbol] = trimmed
                 elif timeframe == '1d':
-                    cache['daily'][symbol] = candles
+                    # Do not retain five years of daily candle arrays in RAM.
+                    cache['daily'][symbol] = summarize_daily_candles(candles)
             except (TypeError, ValueError, json.JSONDecodeError):
                 app.logger.warning('Ignoring invalid cached history for %s (%s)', symbol, timeframe)
 
@@ -748,21 +797,30 @@ def warm_history_for_symbol(symbol):
         app.logger.info('Initial five-year daily backfill for %s: %s to %s', symbol, daily_start, today - timedelta(days=1))
         for start, end in date_chunks(daily_start, today - timedelta(days=1), 366):
             daily_candles.extend(fetch_history(symbol, 'D', start.isoformat(), end.isoformat()))
-        daily_candles = merge_candles([], daily_candles)
-    elif meta.get('daily_fetch_date') != today.isoformat():
-        # Refresh only the latest 10 calendar days and merge them into the
-        # stored five-year history. Do not download the full five years again.
-        recent_start = today - timedelta(days=5)
-        app.logger.info('Incremental daily history update for %s: %s to %s', symbol, recent_start, today)
-        recent = fetch_history(symbol, 'D', recent_start.isoformat(), today.isoformat())
-        daily_candles = merge_candles(daily_existing, recent)
-    else:
-        daily_candles = daily_existing
-
-    if daily_candles is not daily_existing:
-        with lock:
-            cache['daily'][symbol] = daily_candles
+        # Persist the full history once, but retain only two numeric summaries in RAM.
         save_history(symbol, '1d', daily_candles, today.isoformat())
+        daily_summary = summarize_daily_candles(daily_candles, today)
+        del daily_candles
+    elif meta.get('daily_fetch_date') != today.isoformat():
+        recent_start = today - timedelta(days=5)
+        app.logger.info('Incremental daily summary update for %s: %s to %s', symbol, recent_start, today)
+        recent = fetch_history(symbol, 'D', recent_start.isoformat(), today.isoformat())
+        daily_summary = merge_daily_summary(daily_existing, recent, today)
+        del recent
+        with history_db_lock:
+            with _history_db_connect() as db:
+                db.execute(
+                    "INSERT INTO history_meta(symbol, daily_fetch_date) VALUES (?, ?) "
+                    "ON CONFLICT(symbol) DO UPDATE SET daily_fetch_date=excluded.daily_fetch_date",
+                    (symbol, today.isoformat()),
+                )
+        history_meta.setdefault(symbol, {})['daily_fetch_date'] = today.isoformat()
+    else:
+        daily_summary = daily_existing
+
+    if daily_summary is not daily_existing:
+        with lock:
+            cache['daily'][symbol] = daily_summary
 
     # Initial volume baseline: 45 days once. Later: fetch only the latest
     # 5 calendar days and merge. This avoids downloading the same 45-day set
@@ -934,15 +992,8 @@ def build_scan_row(symbol, quote, now=None):
     avg_same_time, _, sessions = volume_ratio_for_time(intraday or [], now)
     volume_ratio = day_volume / avg_same_time if avg_same_time and avg_same_time > 0 else None
 
-    prior_daily = []
-    if daily:
-        for candle in daily:
-            if len(candle) >= 6:
-                candle_date = datetime.fromtimestamp(int(candle[0]), IST).date()
-                if candle_date < now.date():
-                    prior_daily.append(candle)
-    prev_day_high = float(prior_daily[-1][2]) if prior_daily else None
-    historical_ath = max((float(c[2]) for c in prior_daily), default=None)
+    prev_day_high = daily.get('prev_day_high') if isinstance(daily, dict) else None
+    historical_ath = daily.get('ath') if isinstance(daily, dict) else None
     day_high = quote.get('high_price')
     ath = max([x for x in (historical_ath, float(day_high) if day_high is not None else None) if x is not None], default=None)
     ath_distance = ((ath - ltp) / ath * 100) if ath and ath > 0 else None
