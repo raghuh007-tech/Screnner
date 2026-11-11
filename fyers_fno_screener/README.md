@@ -83,7 +83,7 @@ Open the deployed HTTPS URL in Safari, unlock the dashboard, connect the selecte
 Historical candles are stored in SQLite by symbol and timeframe.
 
 - First run: fetches the five-year daily history once per stock (in one-year request chunks) and the last 45 calendar days of 5-minute candles once.
-- Later trading days: fetches only the most recent 10 calendar days of daily candles and the 45-day intraday window, then merges them into the stored records. It does not repeat the five-year backfill.
+- Later trading days: fetches only the most recent 5 calendar days of daily candles and 5-minute candles, then merges them into the stored records. The 45-day 5-minute window is not downloaded again. It does not repeat the five-year backfill.
 - Within the same day: the scanner reuses cached history; the 20-second quote refresh does not trigger historical downloads.
 - Failed history requests are put on a six-hour retry cooldown.
 - The dashboard status endpoint reports how many symbols have both daily and intraday history cached.
