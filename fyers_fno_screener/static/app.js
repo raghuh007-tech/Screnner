@@ -65,8 +65,8 @@ function filteredRows() {
 function signalClass(signal) {
   if (signal === 'PDH BREAKOUT') return 'tag-pdh';
   if (signal === '+2% MOMENTUM') return 'tag-momentum';
-  if (signal === 'NEAR 5Y HIGH') return 'tag-ath';
-  if (signal === '5Y HIGH +2% + 3X') return 'tag-combo';
+  if (signal === 'NEAR 52W HIGH') return 'tag-ath';
+  if (signal === '52W HIGH +2% + 3X') return 'tag-combo';
   return 'tag-ath';
 }
 function badges(signals) {
