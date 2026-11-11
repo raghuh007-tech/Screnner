@@ -825,7 +825,7 @@ def status():
             'history_running': cache['history_running'],
             'history_message': cache['history_message'],
             'history_cache_path': HISTORY_DB_PATH,
-            'history_cache_persistent_mount': HISTORY_DB_PATH.startswith('/var/data/'),
+            'history_cache_persistent_mount': (HISTORY_DB_PATH.startswith('/var/data/') and os.path.ismount('/var/data')),
             'history_cache_symbols': len(set(cache['daily']) & set(cache['intraday'])),
             'history_due_today': sum(1 for symbol in cache['symbols'] if history_due(symbol)),
             'quote_count': cache['last_quote_count'],
