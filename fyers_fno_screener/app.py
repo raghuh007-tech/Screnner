@@ -1400,13 +1400,20 @@ def scan():
 
 @app.route('/api/chart/<symbol>')
 def chart_data(symbol):
-    symbol = symbol.upper().strip()
-    if symbol not in cache['symbols']:
+    # The frontend sends display symbols (e.g. RELIANCE), while the
+    # scanner/history cache uses canonical broker symbols (NSE:RELIANCE-EQ).
+    requested_symbol = (symbol or '').upper().strip()
+    canonical_symbol = requested_symbol
+    if canonical_symbol not in cache['symbols']:
+        ticker = requested_symbol.removeprefix('NSE:').removesuffix('-EQ').strip()
+        canonical_symbol = _normalise_symbol(ticker)
+    if canonical_symbol not in cache['symbols']:
         return jsonify({'error': 'Unknown F&O symbol'}), 404
+
     interval = request.args.get('interval', '5')
     if interval not in {'1', '5', '15', '60'}:
         return jsonify({'error': 'Unsupported interval'}), 400
-    candles = cache['intraday'].get(symbol, [])
+    candles = cache['intraday'].get(canonical_symbol, [])
     if not candles:
         return jsonify({'candles': [], 'message': 'Intraday history is still loading. Please try again shortly.'})
     if interval in {'15', '60'}:
