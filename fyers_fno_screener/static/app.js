@@ -132,9 +132,9 @@ function renderTopGainers(gainers) {
     const checks = (row.new_entry_confirmations || []).map(check =>
       '<span class="new-check ' + (check.passed ? 'passed' : 'pending') + '">' +
       (check.passed ? '✓ ' : '○ ') + esc(check.label) + '</span>').join('');
-    const status = isNew
+    const status = '<span class="gainer-status">' + (isNew
       ? '<span class="gainer-new-tag">NEW · ' + esc(row.new_entry_time || '') + '</span><span class="gainer-level new-score">' + (row.new_entry_confirmation_count || 0) + '/3</span>'
-      : '<span class="gainer-level">' + label + ' · ' + (row.confirmation_count || 0) + '/4</span>';
+      : '<span class="gainer-level">' + label + ' · ' + (row.confirmation_count || 0) + '/4</span>') + '</span>';
     const details = isNew ? checks : (row.confirmations || []).map(esc).join(' · ') || 'No additional confirmation';
     return '<div class="gainer-row confirm-' + level + (isNew ? ' gainer-new-entry' : '') + '" data-symbol="' + esc(row.symbol) + '" role="button" tabindex="0" title="Click to view intraday chart">' +
       '<b class="gainer-rank">' + rank + '</b><b class="gainer-symbol">' + esc(row.symbol) + '</b>' + tradePlanInline(row.ltp) +
