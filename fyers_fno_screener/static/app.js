@@ -237,17 +237,18 @@ document.getElementById('chartModal').addEventListener('click',e=>{if(e.target.i
 document.getElementById('mobileRows').addEventListener('click',e=>{let r=e.target.closest('.stock-row');if(r)openChart(r.dataset.symbol);});
 document.querySelectorAll('.chart-timeframes button').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.chart-timeframes button').forEach(x=>x.classList.toggle('active',x===b));activeTimeframe=b.dataset.tf;openChart(activeChartSymbol);}));
 async function openChart(symbol){
- activeChartSymbol=symbol;document.getElementById('chartSymbol').textContent=symbol;document.getElementById('chartModal').classList.add('open');document.getElementById('chartMessage').textContent='Loading candles…';
+ activeChartSymbol=symbol;document.getElementById('chartSymbol').textContent=symbol;document.getElementById('chartModal').classList.add('open');document.getElementById('chartMessage').textContent='Loading candles and volume…';
  if(chartInstance){chartInstance.remove();chartInstance=null;}
  try{
-  let d=await api(`/api/chart/${encodeURIComponent(symbol)}?interval=${activeTimeframe}`), cs=(d.candles||[]).map(c=>({time:Math.floor(c[0]),open:c[1],high:c[2],low:c[3],close:c[4]}));
+  let d=await api(`/api/chart/${encodeURIComponent(symbol)}?interval=${activeTimeframe}`), raw=d.candles||[];
+  let cs=raw.map(c=>({time:Math.floor(c[0]),open:c[1],high:c[2],low:c[3],close:c[4]}));
   if(!cs.length){document.getElementById('chartMessage').textContent=d.message||'Intraday candles not available yet.';return;}
   let el=document.getElementById('stockChart');
-  chartInstance=LightweightCharts.createChart(el,{width:el.clientWidth,height:el.clientHeight,layout:{background:{color:'#101a28'},textColor:'#a9bad0'},grid:{vertLines:{color:'#1d2b3d'},horzLines:{color:'#1d2b3d'}},timeScale:{timeVisible:true}});
+  chartInstance=LightweightCharts.createChart(el,{width:el.clientWidth,height:el.clientHeight,layout:{background:{color:'#101a28'},textColor:'#a9bad0'},grid:{vertLines:{color:'#1d2b3d'},horzLines:{color:'#1d2b3d'}},timeScale:{timeVisible:true},rightPriceScale:{scaleMargins:{top:0.08,bottom:0.25}},leftPriceScale:{visible:false}});
   let candle=chartInstance.addCandlestickSeries({upColor:'#35c99a',downColor:'#f16f7a',borderVisible:false,wickUpColor:'#35c99a',wickDownColor:'#f16f7a'});candle.setData(cs);
-  let closes=cs.map(c=>({time:c.time,value:c.close}));
-  let e10=chartInstance.addLineSeries({color:'#f5c451',lineWidth:2});e10.setData(calcEma(closes,10));
-  let e20=chartInstance.addLineSeries({color:'#65a9ff',lineWidth:2});e20.setData(calcEma(closes,20));
-  chartInstance.timeScale().fitContent();document.getElementById('chartMessage').textContent='EMA 10 · EMA 20';
+  let volume=chartInstance.addHistogramSeries({priceScaleId:'volume',priceFormat:{type:'volume'},lastValueVisible:false,priceLineVisible:false});
+  volume.priceScale().applyOptions({scaleMargins:{top:0.82,bottom:0}});
+  volume.setData(raw.map(c=>({time:Math.floor(c[0]),value:Number(c[5])||0,color:Number(c[4])>=Number(c[1])?'#35c99a88':'#f16f7a88'})));
+  chartInstance.timeScale().fitContent();document.getElementById('chartMessage').textContent='Volume bars · EMA lines hidden';
  }catch(e){document.getElementById('chartMessage').textContent=e.message;}
 }
