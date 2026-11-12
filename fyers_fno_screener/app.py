@@ -1127,10 +1127,12 @@ def build_scan_row(symbol, quote, now=None):
     week52_high = daily.get('week52_high') if isinstance(daily, dict) else None
     week52_distance = ((week52_high - ltp) / week52_high * 100) if week52_high and week52_high > 0 else None
 
+    # Each confirmation is independent. A 3x relative-volume stock qualifies
+    # even when it has not crossed the previous day's high.
     volume_ok = volume_ratio is not None and volume_ratio >= 3.0
-    pdh_ok = prev_day_high is not None and ltp > prev_day_high and volume_ok
+    pdh_ok = prev_day_high is not None and ltp > prev_day_high
     gain_ok = change_pct is not None and change_pct >= 2.0 and volume_ok
-    week52_ok = week52_distance is not None and week52_distance <= 3.0 and pdh_ok
+    week52_ok = week52_distance is not None and week52_distance <= 3.0
     week52_momentum_ok = week52_distance is not None and week52_distance <= 5.0 and change_pct is not None and change_pct >= 2.0 and volume_ok
     sentiment = classify_sentiment(change_pct)
 
@@ -1141,6 +1143,8 @@ def build_scan_row(symbol, quote, now=None):
         signals.append('+2% MOMENTUM')
     if week52_ok:
         signals.append('NEAR 52W HIGH')
+    if volume_ok:
+        signals.append('3X VOLUME')
     if week52_momentum_ok:
         signals.append('52W HIGH +2% + 3X')
     if not signals:
