@@ -1,5 +1,6 @@
 let rows = [];
 let latestScan = null;
+let activeGainerTab = '1-5';
 let refreshTimer = null;
 const $ = id => document.getElementById(id);
 const fmt = (value, digits = 2) => value == null || value === '' || !Number.isFinite(Number(value))
@@ -12,6 +13,13 @@ async function api(url) {
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || 'Request failed');
   return data;
+}
+const STOCK_CAPITAL = 250000;
+function tradePlanInline(ltp) {
+  const price = Number(ltp);
+  if (!Number.isFinite(price) || price <= 0) return '';
+  const quantity = Math.floor(STOCK_CAPITAL / price);
+  return `<span class="trade-plan"><b>Q:${fmt(quantity,0)}</b><span class="trade-sl">SL:${fmt(price * 0.99)}</span><span class="trade-tgt">TGT:${fmt(price * 1.02)}</span></span>`;
 }
 function sentimentClass(value) {
   return ({
@@ -84,7 +92,7 @@ function render() {
     const changeClass = Number(row.change_pct) >= 0 ? 'positive' : 'negative';
     return `<tr class="desktop-stock-row" data-symbol="${esc(row.symbol)}" title="Click to view intraday chart">
       <td class="stock-cell">
-        <b>${esc(row.symbol)}</b>
+        <b>${esc(row.symbol)}</b>${tradePlanInline(row.ltp)}
         <div class="stock-meta">${esc(row.sector || 'Sector unavailable')}</div>
         <div class="tags">${badges(row.signals)}</div>
       </td>
@@ -109,7 +117,7 @@ function render() {
     const active = checks.filter(([signal]) => (row.signals || []).includes(signal));
     const compactTags = active.map(([, label]) => `<span class="compact-confirm">${label}</span>`).join('');
     return `<button type="button" class="stock-row" data-symbol="${esc(row.symbol)}">
-      <span class="stock-row-main"><b class="stock-row-name">${esc(row.symbol)}</b><span class="stock-row-price">${fmt(row.ltp)}</span><span class="stock-row-change ${changeClass}">${formatChange(row.change_pct)}</span><span class="row-chevron">›</span></span>
+      <span class="stock-row-main"><b class="stock-row-name">${esc(row.symbol)}</b>${tradePlanInline(row.ltp)}<span class="stock-row-price">${fmt(row.ltp)}</span><span class="stock-row-change ${changeClass}">${formatChange(row.change_pct)}</span><span class="row-chevron">›</span></span>
       <span class="stock-row-confirmations">${compactTags}<b class="confirmation-count">${active.length}/4</b></span>
     </button>`;
   }).join('') : '<div class="empty">No stocks currently match these filters.</div>';
@@ -117,7 +125,16 @@ function render() {
 function renderTopGainers(gainers) {
   const host = $('gainersRows'); if (!host) return;
   const list = gainers || [];
-  host.innerHTML = list.length ? list.map((row, index) => {
+  const startIndex = activeGainerTab === '1-5' ? 0 : 5;
+  const visible = list.slice(startIndex, startIndex + 5);
+  const tabHost = $('gainersTabs');
+  if (tabHost) {
+    tabHost.innerHTML = `
+      <button type="button" class="gainer-tab ${activeGainerTab === '1-5' ? 'active' : ''}" data-gainer-tab="1-5">1–5</button>
+      <button type="button" class="gainer-tab ${activeGainerTab === '6-10' ? 'active' : ''}" data-gainer-tab="6-10">6–10</button>`;
+  }
+  host.innerHTML = visible.length ? visible.map((row, offset) => {
+    const index = startIndex + offset;
     const level = row.confirmation_level || 'none';
     const label = level === 'strong' ? 'STRONG' : level === 'moderate' ? 'MODERATE' : level === 'limited' ? 'LIMITED' : 'NO CONFIRMATION';
     const isNew = Boolean(row.is_new_entry);
@@ -129,10 +146,10 @@ function renderTopGainers(gainers) {
       : '<span class="gainer-level">' + label + ' · ' + (row.confirmation_count || 0) + '/4</span>';
     const details = isNew ? checks : (row.confirmations || []).map(esc).join(' · ') || 'No additional confirmation';
     return '<div class="gainer-row confirm-' + level + (isNew ? ' gainer-new-entry' : '') + '" data-symbol="' + esc(row.symbol) + '" role="button" tabindex="0" title="Click to view intraday chart">' +
-      '<b class="gainer-rank">' + (index+1) + '</b><b class="gainer-symbol">' + esc(row.symbol) + '</b>' +
+      '<b class="gainer-rank">' + (index+1) + '</b><b class="gainer-symbol">' + esc(row.symbol) + '</b>' + tradePlanInline(row.ltp) +
       '<span class="gainer-change positive">+' + fmt(row.change_pct) + '%</span>' + status +
       '<small class="gainer-signals">' + details + '</small></div>';
-  }).join('') : '<div class="empty">No positive F&O gainers available yet.</div>';
+  }).join('') : '<div class="empty">No gainers in this rank range yet.</div>';
 }
 
 
@@ -212,6 +229,12 @@ async function refresh() {
 $('rows').addEventListener('click', event => {
   const row = event.target.closest('tr[data-symbol]');
   if (row) openChart(row.dataset.symbol);
+});
+$('gainersTabs').addEventListener('click', event => {
+  const tab = event.target.closest('[data-gainer-tab]');
+  if (!tab || tab.dataset.gainerTab === activeGainerTab) return;
+  activeGainerTab = tab.dataset.gainerTab;
+  renderTopGainers(latestScan?.top_gainers || []);
 });
 $('gainersRows').addEventListener('click', event => {
   const row = event.target.closest('.gainer-row[data-symbol]');
