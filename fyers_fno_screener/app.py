@@ -1127,13 +1127,14 @@ def build_scan_row(symbol, quote, now=None):
     week52_high = daily.get('week52_high') if isinstance(daily, dict) else None
     week52_distance = ((week52_high - ltp) / week52_high * 100) if week52_high and week52_high > 0 else None
 
-    # Each confirmation is independent. A 3x relative-volume stock qualifies
-    # even when it has not crossed the previous day's high.
+    # Mandatory scanner gate: PDH breakout AND at least +2% daily change
+    # AND 3x relative volume. 52-week proximity is an additional confirmation,
+    # never a substitute for the three required conditions.
     volume_ok = volume_ratio is not None and volume_ratio >= 3.0
     pdh_ok = prev_day_high is not None and ltp > prev_day_high
-    gain_ok = change_pct is not None and change_pct >= 2.0 and volume_ok
+    gain_ok = change_pct is not None and change_pct >= 2.0
     week52_ok = week52_distance is not None and week52_distance <= 3.0
-    week52_momentum_ok = week52_distance is not None and week52_distance <= 5.0 and change_pct is not None and change_pct >= 2.0 and volume_ok
+    week52_momentum_ok = week52_distance is not None and week52_distance <= 5.0 and gain_ok and volume_ok
     sentiment = classify_sentiment(change_pct)
 
     signals = []
@@ -1141,13 +1142,13 @@ def build_scan_row(symbol, quote, now=None):
         signals.append('PDH BREAKOUT')
     if gain_ok:
         signals.append('+2% MOMENTUM')
-    if week52_ok:
-        signals.append('NEAR 52W HIGH')
     if volume_ok:
         signals.append('3X VOLUME')
+    if week52_ok:
+        signals.append('NEAR 52W HIGH')
     if week52_momentum_ok:
         signals.append('52W HIGH +2% + 3X')
-    if not signals:
+    if not (pdh_ok and gain_ok and volume_ok):
         return None
 
     return {
