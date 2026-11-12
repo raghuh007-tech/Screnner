@@ -1208,7 +1208,8 @@ def build_scan_row(symbol, quote, now=None):
         'week52_distance_pct': week52_distance,
         'ath_distance_pct': week52_distance,
         'signals': signals,
-        'signal_count': sum((pdh_ok, gain_ok, volume_ok, week52_ok)),
+        'core_signal_count': sum((pdh_ok, gain_ok, volume_ok)),
+        'signal_count': sum((pdh_ok, gain_ok, volume_ok)),
         'history_ready': bool(intraday is not None and daily is not None),
     }
 
