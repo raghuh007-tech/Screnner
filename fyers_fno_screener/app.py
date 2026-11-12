@@ -234,6 +234,22 @@ def init_history_store():
                     PRIMARY KEY (trade_date, symbol)
                 )
             """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS top_gainer_daily_state (
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    first_seen_at TEXT NOT NULL,
+                    is_new INTEGER NOT NULL DEFAULT 0,
+                    alert_sent INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (trade_date, symbol)
+                )
+            """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS top_gainer_snapshot (
+                    trade_date TEXT PRIMARY KEY,
+                    symbols_json TEXT NOT NULL
+                )
+            """)
             # Retain compatibility with the legacy active-signal table.
             alert_rows = db.execute(
                 "SELECT kind, symbol FROM momentum_alert_active"
@@ -1018,9 +1034,117 @@ def build_top_gainers(quotes, symbols, now):
         if week52_distance is not None and week52_distance <= 3.0: confirmations.append('Near 52W high')
         count = len(confirmations)
         level = 'strong' if count >= 3 else 'moderate' if count == 2 else 'limited' if count == 1 else 'none'
-        gainers.append({'symbol': symbol.replace('NSE:', '').replace('-EQ', ''), 'ltp': ltp, 'change_pct': change_pct, 'volume_ratio': volume_ratio, 'confirmations': confirmations, 'confirmation_count': count, 'confirmation_level': level})
+        gainers.append({
+            'symbol': symbol.replace('NSE:', '').replace('-EQ', ''),
+            'ltp': ltp, 'change_pct': change_pct, 'volume_ratio': volume_ratio,
+            'confirmations': confirmations, 'confirmation_count': count, 'confirmation_level': level,
+            'volume_confirmed': volume_ratio is not None and volume_ratio >= 3.0,
+            'pdh_breakout': prev_day_high is not None and ltp > float(prev_day_high),
+            'near_52w_high': week52_distance is not None and week52_distance <= 3.0,
+        })
     gainers.sort(key=lambda row: row['change_pct'], reverse=True)
     return gainers[:10]
+
+
+def mark_new_top_gainer_entries(gainers, now):
+    """Persist first-time Top 10 entries and retain NEW status for the full IST day."""
+    trade_date = now.astimezone(IST).date().isoformat()
+    current_symbols = [str(row['symbol']).upper() for row in gainers]
+    with history_db_lock:
+        with _history_db_connect() as db:
+            previous = db.execute(
+                "SELECT symbols_json FROM top_gainer_snapshot WHERE trade_date=?", (trade_date,)
+            ).fetchone()
+            if previous is None:
+                # First scan is baseline; only later entrants receive NEW.
+                for row in gainers:
+                    db.execute(
+                        "INSERT OR IGNORE INTO top_gainer_daily_state(trade_date,symbol,first_seen_at,is_new,alert_sent) VALUES (?,?,?,0,1)",
+                        (trade_date, str(row['symbol']).upper(), now.isoformat(timespec='seconds'))
+                    )
+            else:
+                previous_symbols = set(json.loads(previous[0] or '[]'))
+                for row in gainers:
+                    symbol = str(row['symbol']).upper()
+                    if symbol not in previous_symbols:
+                        db.execute(
+                            "INSERT OR IGNORE INTO top_gainer_daily_state(trade_date,symbol,first_seen_at,is_new,alert_sent) VALUES (?,?,?,1,0)",
+                            (trade_date, symbol, now.isoformat(timespec='seconds'))
+                        )
+            db.execute(
+                "INSERT INTO top_gainer_snapshot(trade_date,symbols_json) VALUES (?,?) "
+                "ON CONFLICT(trade_date) DO UPDATE SET symbols_json=excluded.symbols_json",
+                (trade_date, json.dumps(current_symbols))
+            )
+            states = {
+                symbol: (first_seen_at, bool(is_new))
+                for symbol, first_seen_at, is_new in db.execute(
+                    "SELECT symbol,first_seen_at,is_new FROM top_gainer_daily_state WHERE trade_date=?",
+                    (trade_date,)
+                ).fetchall()
+            }
+    for row in gainers:
+        first_seen_at, is_new = states.get(str(row['symbol']).upper(), (None, False))
+        row['is_new_entry'] = is_new
+        row['new_entry_time'] = datetime.fromisoformat(first_seen_at).astimezone(IST).strftime('%H:%M') if first_seen_at else None
+        checks = [
+            ('Volume', bool(row.get('volume_confirmed'))),
+            ('PDH breakout', bool(row.get('pdh_breakout'))),
+            ('Near 52W high', bool(row.get('near_52w_high'))),
+        ]
+        row['new_entry_confirmations'] = [{'label': label, 'passed': passed} for label, passed in checks]
+        row['new_entry_confirmation_count'] = sum(1 for _, passed in checks if passed)
+    return gainers
+
+
+def send_new_top_gainer_alerts(gainers, now):
+    """Alert once for every new Top 10 entrant; 52W proximity is informational only."""
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
+    chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
+    if not bot_token or not chat_id:
+        return
+    trade_date = now.astimezone(IST).date().isoformat()
+    with telegram_alert_lock:
+        for row in gainers:
+            if not row.get('is_new_entry'):
+                continue
+            symbol = str(row['symbol']).upper()
+            with _history_db_connect() as db:
+                state = db.execute(
+                    "SELECT alert_sent, first_seen_at FROM top_gainer_daily_state WHERE trade_date=? AND symbol=?",
+                    (trade_date, symbol)
+                ).fetchone()
+            if not state or state[0]:
+                continue
+            volume_text = 'PASS' if row.get('volume_confirmed') else 'NO'
+            pdh_text = 'PASS' if row.get('pdh_breakout') else 'NO'
+            high_text = 'NEAR 52W HIGH' if row.get('near_52w_high') else 'NOT NEAR / DATA N/A'
+            message = (
+                f"🆕 NEW TOP 10 GAINER\\n{symbol} | {row['change_pct']:+.2f}%\\n"
+                f"Entered: {now.strftime('%H:%M IST')}\\n"
+                f"Volume ≥3x: {volume_text} | PDH breakout: {pdh_text}\\n"
+                f"52W: {high_text} (info only)\\n"
+                f"Score: {row.get('new_entry_confirmation_count', 0)}/3\\n"
+                "Open screener to view chart: https://fyers-fno-live-screener.onrender.com"
+            )
+            try:
+                response = requests.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    json={'chat_id': chat_id, 'text': message, 'disable_web_page_preview': True},
+                    timeout=8,
+                )
+                payload = response.json() if response.content else {}
+                if response.status_code == 200 and payload.get('ok') is True:
+                    with _history_db_connect() as db:
+                        db.execute(
+                            "UPDATE top_gainer_daily_state SET alert_sent=1 WHERE trade_date=? AND symbol=?",
+                            (trade_date, symbol)
+                        )
+                    app.logger.info('Telegram NEW Top 10 Gainer alert sent for %s', symbol)
+                else:
+                    app.logger.warning('Telegram NEW Top 10 Gainer alert failed for %s: HTTP %s', symbol, response.status_code)
+            except (requests.RequestException, ValueError) as exc:
+                app.logger.warning('Telegram NEW Top 10 Gainer alert request failed for %s: %s', symbol, exc)
 
 
 def build_momentum_lists(quotes, symbols, now, top_gainer_symbols=None):
@@ -1411,6 +1535,8 @@ def scan():
             history_running = cache['history_running']
         sentiments = summarize_sentiment(quotes)
         top_gainers = build_top_gainers(quotes, symbols, now)
+        top_gainers = mark_new_top_gainer_entries(top_gainers, now)
+        send_new_top_gainer_alerts(top_gainers, now)
         top_gainer_symbols = {row['symbol'].upper() for row in top_gainers}
         momentum = build_momentum_lists(quotes, symbols, now, top_gainer_symbols)
         send_telegram_momentum_alerts(momentum, now)
