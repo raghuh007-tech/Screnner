@@ -300,15 +300,14 @@ tbody tr:hover{background:#18283a}
 
 @media(max-width:760px){
  .mobile-rows{display:grid;grid-template-columns:1fr;gap:0;padding:0 8px}
- .stock-row{display:grid;grid-template-columns:minmax(0,1fr);gap:5px;width:100%;min-height:58px;padding:9px 3px;background:transparent;border:0;border-bottom:1px solid #26374d;color:#edf3fb;text-align:left}
+ .stock-row{display:grid;grid-template-columns:minmax(0,1fr);gap:5px;width:100%;min-height:54px;padding:8px 3px;background:transparent;border:0;border-bottom:1px solid #26374d;color:#edf3fb;text-align:left}
  .stock-row-main{display:grid;grid-template-columns:minmax(0,1fr) auto auto 10px;align-items:center;gap:8px}
  .stock-row-name{font-size:13px;font-weight:850;overflow:hidden;text-overflow:ellipsis}
- .stock-row-signals{display:flex;flex-wrap:wrap;gap:4px;min-width:0;white-space:normal}
- .stock-row-signals .tag{font-size:7px;padding:3px 4px;line-height:1.2}
- .stock-row-details{display:flex;flex-wrap:wrap;gap:5px 10px;color:#9aadc3;font-size:9px;line-height:1.35}
- .stock-row-details span{white-space:nowrap}
+ .stock-row-confirmations{display:flex;align-items:center;gap:5px;flex-wrap:nowrap;white-space:nowrap;min-width:0;overflow:hidden}
+ .compact-confirm{display:inline-flex;align-items:center;padding:3px 6px;border-radius:4px;background:#193651;color:#a9d4ff;font-size:8px;font-weight:850;line-height:1.2;white-space:nowrap}
+ .compact-confirm:first-child{background:#12382f;color:#65e2b3}
+ .confirmation-count{margin-left:auto;color:#d6e3f2;font-size:9px;font-weight:900;white-space:nowrap}
  .stock-row-price{font-size:12px;font-weight:750;text-align:right}.stock-row-change{font-size:11px;font-weight:800;text-align:right;white-space:nowrap}.row-chevron{color:#7e91a9}
- .tag-volume{background:#183b32;color:#72e3b6;border:1px solid #28634f}
  .chart-modal{display:none;position:fixed;inset:0;z-index:9999;background:#070d16ed;padding:12px;align-items:center;justify-content:center}.chart-modal.open{display:flex}
  .chart-dialog{width:100%;max-width:720px;background:#101a28;border:1px solid #304258;border-radius:14px;padding:12px}
  .chart-head{display:flex;justify-content:space-between;align-items:center;color:#f1f5fa;font-size:16px}.chart-head small{display:block;color:#94a8c0;font-size:10px;margin-top:3px}
