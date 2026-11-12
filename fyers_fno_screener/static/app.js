@@ -153,16 +153,6 @@ function renderTopGainers(gainers) {
 }
 
 
-function renderMomentum(data) {
-  const host = $('freshMomentum');
-  if (!host) return;
-  const items = data?.fresh_momentum || [];
-  host.innerHTML = items.length ? items.map((r,i) => {
-    const checks = (r.confirmations || []).map(esc).join(' · ');
-    return '<div class="momentum-row mom-strong"><span class="mom-rank">'+(i+1)+'</span><b class="mom-symbol">'+esc(r.symbol)+'</b><span class="mom-daily">'+formatChange(r.change_pct)+'</span><strong class="mom-move">+'+fmt(r.move_5m)+'%</strong><span class="mom-checks">'+checks+' · '+fmt(r.volume_ratio)+'×</span></div>';
-  }).join('') : '<div class="empty">No stocks meet all four Fresh Momentum filters yet.</div>';
-}
-
 function renderMarketContext(context) {
   const nifty = context?.nifty50 || {};
   $('niftyPrice').textContent = fmt(nifty.price);
@@ -198,10 +188,8 @@ async function refresh() {
     latestScan = data;
     rows = data.rows || [];
     renderTopGainers(data.top_gainers || []);
-    renderMomentum(data.momentum || {});
     $('universe').textContent = fmt(data.universe,0);
     $('pdhCount').textContent = fmt(data.pd_breakouts,0);
-    $('momentumCount').textContent = fmt(data.momentum_count,0);
     $('athCount').textContent = fmt(data.near_52w,0);
     $('athMomentumCount').textContent = fmt(data.week52_momentum,0);
     renderMarketContext(data.market_context);
