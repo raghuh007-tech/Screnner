@@ -349,3 +349,22 @@ tbody tr:hover{background:#18283a}
 .gainer-new-entry .gainer-signals{display:flex;gap:8px;flex-wrap:wrap;white-space:normal}
 .new-check{font-size:8px;font-weight:800;white-space:nowrap}.new-check.passed{color:#70e5b7}.new-check.pending{color:#93a5ba}
 @media(max-width:760px){.gainer-new-tag{font-size:7px;padding:2px 4px}.gainer-new-entry .gainer-signals{gap:5px}.new-check{font-size:7px}}
+
+/* Inline trade sizing and compact Top 10 rank tabs */
+.trade-plan{display:inline-flex;align-items:center;gap:6px;margin-left:7px;font-size:9px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.trade-plan b{font-weight:850;color:var(--text,#e8edf5)}
+.trade-sl{color:#ff7777;font-weight:750}.trade-tgt{color:#55d6a4;font-weight:750}
+.stock-cell .trade-plan{margin-top:3px;margin-left:0}
+.stock-row .trade-plan{margin-left:4px;gap:4px;font-size:8px}
+.gainer-row .trade-plan{margin-left:5px;gap:5px;font-size:9px}
+.gainers-tabs{display:flex;gap:6px;padding:0 12px 10px}
+.gainer-tab{border:1px solid var(--border,#344255);background:transparent;color:var(--muted,#9aabc0);border-radius:6px;padding:5px 13px;font-size:11px;font-weight:800;cursor:pointer}
+.gainer-tab.active{background:var(--accent,#2d8cff);border-color:var(--accent,#2d8cff);color:white}
+@media(max-width:760px){
+ .stock-row .trade-plan{gap:3px;font-size:7px;margin-left:2px}
+ .stock-row .trade-plan b,.stock-row .trade-plan span{font-size:7px}
+ .gainer-row{grid-template-columns:20px minmax(70px,1fr) auto auto;column-gap:6px}
+ .gainer-row .trade-plan{grid-column:2 / 4;margin:2px 0 0;font-size:8px}
+ .gainer-row .gainer-signals{grid-column:1 / -1}
+ .gainer-tabs{padding-bottom:8px}
+}
