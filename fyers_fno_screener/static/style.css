@@ -340,3 +340,12 @@ tbody tr:hover{background:#18283a}
 .fresh-momentum-panel{margin:8px 0;overflow:hidden}
 .fresh-momentum-panel .momentum-list{padding:2px 12px 8px}
 @media(max-width:760px){.fresh-momentum-panel{margin:7px 0}.fresh-momentum-panel .momentum-list{padding:0 8px 5px}}
+
+/* NEW Top 10 entrants: daily highlight, three confirmations and chart affordance */
+.gainer-row{cursor:pointer}.gainer-row:hover{background-color:#1a2a3d}
+.gainer-new-entry{border-left-color:#39d69b!important;background:linear-gradient(90deg,#123d32aa,transparent)!important}
+.gainer-new-tag{justify-self:end;color:#071b15;background:#65e1ae;border-radius:4px;padding:3px 6px;font-size:8px;font-weight:950;white-space:nowrap}
+.gainer-level.new-score{color:#70e5b7}
+.gainer-new-entry .gainer-signals{display:flex;gap:8px;flex-wrap:wrap;white-space:normal}
+.new-check{font-size:8px;font-weight:800;white-space:nowrap}.new-check.passed{color:#70e5b7}.new-check.pending{color:#93a5ba}
+@media(max-width:760px){.gainer-new-tag{font-size:7px;padding:2px 4px}.gainer-new-entry .gainer-signals{gap:5px}.new-check{font-size:7px}}
