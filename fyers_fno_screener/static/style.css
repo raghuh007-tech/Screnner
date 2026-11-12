@@ -316,3 +316,9 @@ tbody tr:hover{background:#18283a}
 .mom-developing{border-left-color:#f2c36f;background:linear-gradient(90deg,#46371935,transparent)}
 .mom-developing .mom-move{color:#f2c36f}.mom-early{border-left-color:#78b9f5}
 @media(max-width:760px){.momentum-grid{grid-template-columns:1fr;gap:7px;margin:7px 0}.momentum-panel .panel-head{min-height:48px;padding:7px 9px}.momentum-panel .panel-head h2{font-size:12px}.momentum-panel .panel-head p{font-size:7px}.momentum-list{padding:0 8px 5px}.momentum-row{grid-template-columns:16px minmax(65px,1fr) 50px 58px;gap:5px;padding:7px 3px}.mom-symbol{font-size:11px}.mom-move{font-size:11px}.mom-checks{font-size:7px}}
+
+
+/* Single Fresh Momentum panel */
+.fresh-momentum-panel{margin:8px 0;overflow:hidden}
+.fresh-momentum-panel .momentum-list{padding:2px 12px 8px}
+@media(max-width:760px){.fresh-momentum-panel{margin:7px 0}.fresh-momentum-panel .momentum-list{padding:0 8px 5px}}
