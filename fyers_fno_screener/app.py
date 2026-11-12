@@ -181,6 +181,16 @@ def init_history_store():
                     meta_value TEXT NOT NULL
                 )
             """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS momentum_alert_active (
+                    kind TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    PRIMARY KEY (kind, symbol)
+                )
+            """)
+            alert_rows = db.execute(
+                "SELECT kind, symbol FROM momentum_alert_active"
+            ).fetchall()
             rows = db.execute(
                 "SELECT symbol, timeframe, candles_json FROM candle_cache"
             ).fetchall()
@@ -220,6 +230,10 @@ def init_history_store():
                 'last_error': row[4],
             }
         cache['stock_sectors'].update({symbol: sector for symbol, sector in sector_rows})
+        for kind, symbol in alert_rows:
+            if kind in telegram_alert_state:
+                telegram_alert_state[kind].add(symbol)
+
         for key, value in app_meta_rows:
             if key == 'sector_updated_at':
                 cache['sector_updated_at'] = value
@@ -982,7 +996,7 @@ def build_momentum_lists(quotes, symbols, now):
         if not history or current_ts - history[-1][0] >= 45:
             history.append((current_ts, ltp))
         # Need a full five-minute observation window before emitting a signal.
-        past = next(((ts, price) for ts, price in reversed(history) if current_ts - ts >= 240), None)
+        past = next(((ts, price) for ts, price in reversed(history) if current_ts - ts >= 300), None)
         if not past:
             continue
         move_5m = (ltp / past[1] - 1) * 100
@@ -1017,46 +1031,73 @@ def build_momentum_lists(quotes, symbols, now):
 
 
 def send_telegram_momentum_alerts(momentum, now):
-    """Send one Telegram alert when a stock newly enters fresh/strong momentum."""
+    """Send alerts only on signal entry; persist delivered active signals across restarts."""
     bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
     chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
     if not bot_token or not chat_id:
         return
+
     fresh_rows = momentum.get('fresh_momentum', [])
     strong_rows = [r for r in momentum.get('strongest_momentum', []) if r.get('level') == 'strong']
     current = {
         'fresh': {r['symbol']: r for r in fresh_rows},
         'strong': {r['symbol']: r for r in strong_rows},
     }
-    messages = []
+
     with telegram_alert_lock:
+        with _history_db_connect() as db:
+            previous = {'fresh': set(), 'strong': set()}
+            for kind, symbol in db.execute(
+                "SELECT kind, symbol FROM momentum_alert_active"
+            ).fetchall():
+                if kind in previous:
+                    previous[kind].add(symbol)
+
         for kind in ('fresh', 'strong'):
-            previous = telegram_alert_state[kind]
+            delivered = set()
             for symbol, row in current[kind].items():
-                if symbol in previous:
+                if symbol in previous[kind]:
+                    delivered.add(symbol)
                     continue
+
                 title = '⚡ FRESH MOMENTUM' if kind == 'fresh' else '🚀 STRONG MOMENTUM'
                 volume = f"{row['volume_ratio']:.1f}x" if row.get('volume_ratio') is not None else 'N/A'
                 checks = ', '.join(row.get('confirmations') or [])
-                messages.append(
+                message = (
                     f"{title}\\n"
                     f"{symbol} | 5m: +{row['move_5m']:.2f}% | Day: {row['change_pct']:+.2f}%\\n"
                     f"Volume: {volume} | Confirmations: {checks}\\n"
                     f"{now.strftime('%H:%M:%S IST')}\\n"
                     f"https://fyers-fno-live-screener.onrender.com"
                 )
-            telegram_alert_state[kind] = set(current[kind])
-    for message in messages:
-        try:
-            response = requests.post(
-                f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                json={'chat_id': chat_id, 'text': message, 'disable_web_page_preview': True},
-                timeout=5,
-            )
-            if response.status_code != 200:
-                app.logger.warning('Telegram alert failed: HTTP %s', response.status_code)
-        except requests.RequestException as exc:
-            app.logger.warning('Telegram alert request failed: %s', exc)
+                try:
+                    response = requests.post(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        json={'chat_id': chat_id, 'text': message, 'disable_web_page_preview': True},
+                        timeout=8,
+                    )
+                    payload = response.json() if response.content else {}
+                    if response.status_code == 200 and payload.get('ok') is True:
+                        delivered.add(symbol)
+                        app.logger.info('Telegram %s alert delivered for %s', kind, symbol)
+                    else:
+                        app.logger.warning(
+                            'Telegram %s alert failed for %s: HTTP %s (%s)',
+                            kind, symbol, response.status_code, payload.get('description', 'no confirmation')
+                        )
+                except (requests.RequestException, ValueError) as exc:
+                    app.logger.warning('Telegram %s alert request failed for %s: %s', kind, symbol, exc)
+
+            # Keep only still-active signals. Failed new deliveries are omitted,
+            # so the next scan retries them instead of losing the alert.
+            active = (previous[kind] & set(current[kind])) | delivered
+            with _history_db_connect() as db:
+                db.execute("DELETE FROM momentum_alert_active WHERE kind=?", (kind,))
+                db.executemany(
+                    "INSERT OR IGNORE INTO momentum_alert_active(kind, symbol) VALUES (?, ?)",
+                    [(kind, symbol) for symbol in sorted(active)]
+                )
+            telegram_alert_state[kind] = active
 
 
 def build_scan_row(symbol, quote, now=None):
@@ -1339,7 +1380,7 @@ def scan():
             'universe': len(symbols),
             'matched': len(rows),
             'pd_breakouts': sum('PDH BREAKOUT' in row['signals'] for row in rows),
-            'momentum': sum('+2% MOMENTUM' in row['signals'] for row in rows),
+            'momentum_count': sum('+2% MOMENTUM' in row['signals'] for row in rows),
             'near_52w': sum('NEAR 52W HIGH' in row['signals'] for row in rows),
             'week52_momentum': sum('52W HIGH +2% + 3X' in row['signals'] for row in rows),
             'sentiment': sentiments,
