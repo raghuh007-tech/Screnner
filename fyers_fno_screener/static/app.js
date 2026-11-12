@@ -1,4 +1,5 @@
 let rows = [];
+let latestScan = null;
 let refreshTimer = null;
 const $ = id => document.getElementById(id);
 const fmt = (value, digits = 2) => value == null || value === '' || !Number.isFinite(Number(value))
@@ -158,14 +159,15 @@ async function refresh() {
   $('refresh').disabled = true;
   try {
     const data = await api('/api/scan');
+    latestScan = data;
     rows = data.rows || [];
     renderTopGainers(data.top_gainers || []);
     renderMomentum(data.momentum || {});
     $('universe').textContent = fmt(data.universe,0);
     $('pdhCount').textContent = fmt(data.pd_breakouts,0);
-    $('momentumCount').textContent = fmt(data.momentum,0);
-    $('athCount').textContent = fmt(data.near_ath,0);
-    $('athMomentumCount').textContent = fmt(data.ath_momentum,0);
+    $('momentumCount').textContent = fmt(data.momentum_count,0);
+    $('athCount').textContent = fmt(data.near_52w,0);
+    $('athMomentumCount').textContent = fmt(data.week52_momentum,0);
     renderMarketContext(data.market_context);
     renderSentiment(data.sentiment);
     $('feed').textContent = `Updated ${new Date(data.updated_at).toLocaleTimeString('en-IN')}`;
@@ -190,6 +192,32 @@ async function refresh() {
 $('signalFilter').addEventListener('change', render);
 $('sort').addEventListener('change', render);
 $('refresh').addEventListener('click', refresh);
+$('exportSymbols').addEventListener('click', async () => {
+  if (!latestScan) {
+    $('feed').textContent = 'Wait for the first successful scan before exporting symbols.';
+    return;
+  }
+  const symbols = new Set();
+  const add = value => {
+    const symbol = String(value || '').trim().replace(/^(NSE:)/i, '').replace(/(-EQ)$/i, '').toUpperCase();
+    if (symbol) symbols.add(symbol);
+  };
+  (latestScan.top_gainers || []).forEach(row => add(row.symbol));
+  (latestScan.momentum?.fresh_momentum || []).forEach(row => add(row.symbol));
+  (latestScan.momentum?.strongest_momentum || []).forEach(row => add(row.symbol));
+  (latestScan.rows || []).filter(row => ['Bullish','Bearish'].includes(row.sentiment)).forEach(row => add(row.symbol));
+  const exportText = [...symbols].sort().join('\\n');
+  if (!exportText) {
+    $('feed').textContent = 'No scanned symbols available to export yet.';
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(exportText);
+    $('feed').textContent = `Copied ${symbols.size} unique symbols. Paste manually into Kite watchlist.`;
+  } catch (_) {
+    $('feed').textContent = 'Clipboard access blocked. Allow clipboard permission and retry.';
+  }
+});
 (async () => {
   if ('serviceWorker' in navigator) {
     try { await navigator.serviceWorker.register('/static/sw.js'); } catch (_) {}
