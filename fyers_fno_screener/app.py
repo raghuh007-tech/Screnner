@@ -1098,7 +1098,10 @@ def mark_new_top_gainer_entries(gainers, now):
 
 
 def send_new_top_gainer_alerts(gainers, now):
-    """Alert once for every new Top 10 entrant; 52W proximity is informational only."""
+    """Alert once for every new Top 10 entrant, but only through 10:30 AM IST."""
+    local_now = now.astimezone(IST)
+    if (local_now.hour, local_now.minute) > (10, 30):
+        return
     bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
     chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
     if not bot_token or not chat_id:
@@ -1210,7 +1213,10 @@ def build_momentum_lists(quotes, symbols, now, top_gainer_symbols=None):
 
 
 def send_telegram_momentum_alerts(momentum, now):
-    """Send at most one successful Fresh Momentum alert per symbol per IST trading day."""
+    """Send at most one Fresh Momentum alert per symbol per day, through 10:30 AM IST."""
+    local_now = now.astimezone(IST)
+    if (local_now.hour, local_now.minute) > (10, 30):
+        return
     bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
     chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
     if not bot_token or not chat_id:
