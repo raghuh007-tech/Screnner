@@ -188,9 +188,14 @@ def init_history_store():
                     PRIMARY KEY (kind, symbol)
                 )
             """)
-            alert_rows = db.execute(
-                "SELECT kind, symbol FROM momentum_alert_active"
-            ).fetchall()
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS momentum_alert_daily (
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    sent_at TEXT NOT NULL,
+                    PRIMARY KEY (trade_date, symbol)
+                )
+            """)
             rows = db.execute(
                 "SELECT symbol, timeframe, candles_json FROM candle_cache"
             ).fetchall()
@@ -976,10 +981,11 @@ def build_top_gainers(quotes, symbols, now):
     return gainers[:10]
 
 
-def build_momentum_lists(quotes, symbols, now):
-    """Track rolling one-minute LTP snapshots; rank fresh and sustained 5m momentum."""
+def build_momentum_lists(quotes, symbols, now, top_gainer_symbols=None):
+    """Return only strict Fresh Momentum signals; Top 10 gainers stay in their own panel."""
     current_ts = now.timestamp()
-    fresh, strongest = [], []
+    fresh = []
+    top_gainer_symbols = set(top_gainer_symbols or ())
     for symbol in symbols:
         quote = quotes.get(symbol)
         if not quote:
@@ -992,112 +998,102 @@ def build_momentum_lists(quotes, symbols, now):
             continue
         if ltp <= 0:
             continue
+
         history = momentum_snapshots.setdefault(symbol, deque(maxlen=12))
         if not history or current_ts - history[-1][0] >= 45:
             history.append((current_ts, ltp))
-        # Need a full five-minute observation window before emitting a signal.
+        # Wait for a complete five-minute rolling observation window.
         past = next(((ts, price) for ts, price in reversed(history) if current_ts - ts >= 300), None)
         if not past:
             continue
         move_5m = (ltp / past[1] - 1) * 100
-        if move_5m <= 0:
-            continue
+
         with lock:
             intraday = cache['intraday'].get(symbol) or []
             daily = cache['daily'].get(symbol) or {}
         avg_same_time, _, _ = volume_ratio_for_time(intraday, now)
         volume_ratio = day_volume / avg_same_time if avg_same_time and avg_same_time > 0 else None
         prev_high = daily.get('prev_day_high')
-        confirmations = []
-        if move_5m >= 0.50: confirmations.append('5m surge')
-        if daily_change >= 1.0: confirmations.append('Daily green')
-        if volume_ratio is not None and volume_ratio >= 1.5: confirmations.append('Volume')
-        if prev_high is not None and ltp > prev_high: confirmations.append('PDH')
-        item = {
-            'symbol': symbol.replace('NSE:', '').replace('-EQ', ''),
-            'change_pct': daily_change, 'move_5m': move_5m,
-            'volume_ratio': volume_ratio, 'confirmations': confirmations,
-            'confirmation_count': len(confirmations),
-            'level': 'strong' if len(confirmations) >= 3 else 'developing' if len(confirmations) == 2 else 'early',
-        }
-        strongest.append(item)
-        # Fresh = a meaningful 5-minute rise, with at least two independent checks.
-        if move_5m >= 0.50 and len(confirmations) >= 2:
-            fresh.append(item)
-    strongest.sort(key=lambda x: (x['move_5m'], x['confirmation_count']), reverse=True)
-    fresh.sort(key=lambda x: (x['move_5m'], x['confirmation_count']), reverse=True)
-    return {'fresh_momentum': fresh[:8], 'strongest_momentum': strongest[:8]}
 
+        # All four conditions are mandatory. PDH is a required breakout.
+        if move_5m <= 1.0 or daily_change <= 2.0:
+            continue
+        if volume_ratio is None or volume_ratio < 3.0:
+            continue
+        if prev_high is None or ltp <= float(prev_high):
+            continue
+
+        display_symbol = symbol.replace('NSE:', '').replace('-EQ', '')
+        # Keep Top 10 gainers in their dedicated panel; never duplicate them here.
+        if display_symbol.upper() in top_gainer_symbols:
+            continue
+
+        fresh.append({
+            'symbol': display_symbol,
+            'change_pct': daily_change,
+            'move_5m': move_5m,
+            'volume_ratio': volume_ratio,
+            'prev_day_high': float(prev_high),
+            'confirmations': ['5m surge >1%', 'Daily change >2%', 'Volume ≥3×', 'PDH breakout'],
+            'confirmation_count': 4,
+            'level': 'strong',
+        })
+
+    fresh.sort(key=lambda row: (row['move_5m'], row['volume_ratio']), reverse=True)
+    return {'fresh_momentum': fresh[:20]}
 
 
 def send_telegram_momentum_alerts(momentum, now):
-    """Send alerts only on signal entry; persist delivered active signals across restarts."""
+    """Send at most one successful Fresh Momentum alert per symbol per IST trading day."""
     bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
     chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
     if not bot_token or not chat_id:
         return
 
-    fresh_rows = momentum.get('fresh_momentum', [])
-    strong_rows = [r for r in momentum.get('strongest_momentum', []) if r.get('level') == 'strong']
-    current = {
-        'fresh': {r['symbol']: r for r in fresh_rows},
-        'strong': {r['symbol']: r for r in strong_rows},
-    }
+    trade_date = now.astimezone(IST).date().isoformat()
+    rows = momentum.get('fresh_momentum', [])
 
     with telegram_alert_lock:
-        with _history_db_connect() as db:
-            previous = {'fresh': set(), 'strong': set()}
-            for kind, symbol in db.execute(
-                "SELECT kind, symbol FROM momentum_alert_active"
-            ).fetchall():
-                if kind in previous:
-                    previous[kind].add(symbol)
-
-        for kind in ('fresh', 'strong'):
-            delivered = set()
-            for symbol, row in current[kind].items():
-                if symbol in previous[kind]:
-                    delivered.add(symbol)
-                    continue
-
-                title = '⚡ FRESH MOMENTUM' if kind == 'fresh' else '🚀 STRONG MOMENTUM'
-                volume = f"{row['volume_ratio']:.1f}x" if row.get('volume_ratio') is not None else 'N/A'
-                checks = ', '.join(row.get('confirmations') or [])
-                message = (
-                    f"{title}\\n"
-                    f"{symbol} | 5m: +{row['move_5m']:.2f}% | Day: {row['change_pct']:+.2f}%\\n"
-                    f"Volume: {volume} | Confirmations: {checks}\\n"
-                    f"{now.strftime('%H:%M:%S IST')}\\n"
-                    f"https://fyers-fno-live-screener.onrender.com"
-                )
-                try:
-                    response = requests.post(
-                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                        json={'chat_id': chat_id, 'text': message, 'disable_web_page_preview': True},
-                        timeout=8,
-                    )
-                    payload = response.json() if response.content else {}
-                    if response.status_code == 200 and payload.get('ok') is True:
-                        delivered.add(symbol)
-                        app.logger.info('Telegram %s alert delivered for %s', kind, symbol)
-                    else:
-                        app.logger.warning(
-                            'Telegram %s alert failed for %s: HTTP %s (%s)',
-                            kind, symbol, response.status_code, payload.get('description', 'no confirmation')
-                        )
-                except (requests.RequestException, ValueError) as exc:
-                    app.logger.warning('Telegram %s alert request failed for %s: %s', kind, symbol, exc)
-
-            # Keep only still-active signals. Failed new deliveries are omitted,
-            # so the next scan retries them instead of losing the alert.
-            active = (previous[kind] & set(current[kind])) | delivered
+        for row in rows:
+            symbol = row['symbol']
             with _history_db_connect() as db:
-                db.execute("DELETE FROM momentum_alert_active WHERE kind=?", (kind,))
-                db.executemany(
-                    "INSERT OR IGNORE INTO momentum_alert_active(kind, symbol) VALUES (?, ?)",
-                    [(kind, symbol) for symbol in sorted(active)]
+                already_sent = db.execute(
+                    "SELECT 1 FROM momentum_alert_daily WHERE trade_date=? AND symbol=?",
+                    (trade_date, symbol)
+                ).fetchone()
+            if already_sent:
+                continue
+
+            volume = f"{row['volume_ratio']:.1f}x" if row.get('volume_ratio') is not None else 'N/A'
+            message = (
+                f"⚡ FRESH MOMENTUM\\n"
+                f"{symbol} | 5m: +{row['move_5m']:.2f}% | Day: {row['change_pct']:+.2f}%\\n"
+                f"Volume: {volume} | PDH breakout: YES\\n"
+                f"{now.strftime('%H:%M:%S IST')}\\n"
+                f"https://fyers-fno-live-screener.onrender.com"
+            )
+            try:
+                response = requests.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    json={'chat_id': chat_id, 'text': message, 'disable_web_page_preview': True},
+                    timeout=8,
                 )
-            telegram_alert_state[kind] = active
+                payload = response.json() if response.content else {}
+                if response.status_code == 200 and payload.get('ok') is True:
+                    # Unique (date, symbol) key prevents repeat alerts across restarts.
+                    with _history_db_connect() as db:
+                        db.execute(
+                            "INSERT OR IGNORE INTO momentum_alert_daily(trade_date, symbol, sent_at) VALUES (?, ?, ?)",
+                            (trade_date, symbol, now.isoformat())
+                        )
+                    app.logger.info('Telegram Fresh Momentum alert delivered for %s on %s', symbol, trade_date)
+                else:
+                    app.logger.warning(
+                        'Telegram Fresh Momentum alert failed for %s: HTTP %s (%s)',
+                        symbol, response.status_code, payload.get('description', 'no confirmation')
+                    )
+            except (requests.RequestException, ValueError) as exc:
+                app.logger.warning('Telegram Fresh Momentum alert request failed for %s: %s', symbol, exc)
 
 
 def build_scan_row(symbol, quote, now=None):
@@ -1368,7 +1364,8 @@ def scan():
             history_running = cache['history_running']
         sentiments = summarize_sentiment(quotes)
         top_gainers = build_top_gainers(quotes, symbols, now)
-        momentum = build_momentum_lists(quotes, symbols, now)
+        top_gainer_symbols = {row['symbol'].upper() for row in top_gainers}
+        momentum = build_momentum_lists(quotes, symbols, now, top_gainer_symbols)
         send_telegram_momentum_alerts(momentum, now)
         context = market_context()
         return jsonify({
