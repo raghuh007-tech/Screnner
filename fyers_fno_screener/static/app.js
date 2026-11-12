@@ -1,6 +1,5 @@
 let rows = [];
 let latestScan = null;
-let activeGainerTab = '1-5';
 let refreshTimer = null;
 const $ = id => document.getElementById(id);
 const fmt = (value, digits = 2) => value == null || value === '' || !Number.isFinite(Number(value))
@@ -125,16 +124,7 @@ function render() {
 function renderTopGainers(gainers) {
   const host = $('gainersRows'); if (!host) return;
   const list = gainers || [];
-  const startIndex = activeGainerTab === '1-5' ? 0 : 5;
-  const visible = list.slice(startIndex, startIndex + 5);
-  const tabHost = $('gainersTabs');
-  if (tabHost) {
-    tabHost.innerHTML = `
-      <button type="button" class="gainer-tab ${activeGainerTab === '1-5' ? 'active' : ''}" data-gainer-tab="1-5">1–5</button>
-      <button type="button" class="gainer-tab ${activeGainerTab === '6-10' ? 'active' : ''}" data-gainer-tab="6-10">6–10</button>`;
-  }
-  host.innerHTML = visible.length ? visible.map((row, offset) => {
-    const index = startIndex + offset;
+  host.innerHTML = list.length ? list.map((row, index) => {
     const level = row.confirmation_level || 'none';
     const label = level === 'strong' ? 'STRONG' : level === 'moderate' ? 'MODERATE' : level === 'limited' ? 'LIMITED' : 'NO CONFIRMATION';
     const isNew = Boolean(row.is_new_entry);
@@ -149,7 +139,7 @@ function renderTopGainers(gainers) {
       '<b class="gainer-rank">' + (index+1) + '</b><b class="gainer-symbol">' + esc(row.symbol) + '</b>' + tradePlanInline(row.ltp) +
       '<span class="gainer-change positive">+' + fmt(row.change_pct) + '%</span>' + status +
       '<small class="gainer-signals">' + details + '</small></div>';
-  }).join('') : '<div class="empty">No gainers in this rank range yet.</div>';
+  }).join('') : '<div class="empty">No positive F&O gainers available yet.</div>';
 }
 
 
@@ -217,12 +207,6 @@ async function refresh() {
 $('rows').addEventListener('click', event => {
   const row = event.target.closest('tr[data-symbol]');
   if (row) openChart(row.dataset.symbol);
-});
-$('gainersTabs').addEventListener('click', event => {
-  const tab = event.target.closest('[data-gainer-tab]');
-  if (!tab || tab.dataset.gainerTab === activeGainerTab) return;
-  activeGainerTab = tab.dataset.gainerTab;
-  renderTopGainers(latestScan?.top_gainers || []);
 });
 $('gainersRows').addEventListener('click', event => {
   const row = event.target.closest('.gainer-row[data-symbol]');
