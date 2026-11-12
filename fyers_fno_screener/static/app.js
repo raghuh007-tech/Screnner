@@ -81,7 +81,7 @@ function render() {
   const matches = filteredRows();
   $('rows').innerHTML = matches.length ? matches.map(row => {
     const changeClass = Number(row.change_pct) >= 0 ? 'positive' : 'negative';
-    return `<tr>
+    return `<tr class="desktop-stock-row" data-symbol="${esc(row.symbol)}" title="Click to view intraday chart">
       <td class="stock-cell">
         <b>${esc(row.symbol)}</b>
         <div class="stock-meta">${esc(row.sector || 'Sector unavailable')}</div>
@@ -186,6 +186,11 @@ async function refresh() {
     $('refresh').disabled = false;
   }
 }
+// Desktop table rows open the same chart modal as mobile stock cards.
+$('rows').addEventListener('click', event => {
+  const row = event.target.closest('tr[data-symbol]');
+  if (row) openChart(row.dataset.symbol);
+});
 $('signalFilter').addEventListener('change', render);
 $('sort').addEventListener('change', render);
 $('refresh').addEventListener('click', refresh);
