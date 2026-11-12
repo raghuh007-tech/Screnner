@@ -120,8 +120,18 @@ function renderTopGainers(gainers) {
   host.innerHTML = list.length ? list.map((row, index) => {
     const level = row.confirmation_level || 'none';
     const label = level === 'strong' ? 'STRONG' : level === 'moderate' ? 'MODERATE' : level === 'limited' ? 'LIMITED' : 'NO CONFIRMATION';
-    const signals = (row.confirmations || []).map(esc).join(' · ') || 'No additional confirmation';
-    return '<div class="gainer-row confirm-' + level + '"><b class="gainer-rank">' + (index+1) + '</b><b class="gainer-symbol">' + esc(row.symbol) + '</b><span class="gainer-change positive">+' + fmt(row.change_pct) + '%</span><span class="gainer-level">' + label + ' · ' + (row.confirmation_count || 0) + '/4</span><small class="gainer-signals">' + signals + '</small></div>';
+    const isNew = Boolean(row.is_new_entry);
+    const checks = (row.new_entry_confirmations || []).map(check =>
+      '<span class="new-check ' + (check.passed ? 'passed' : 'pending') + '">' +
+      (check.passed ? '✓ ' : '○ ') + esc(check.label) + '</span>').join('');
+    const status = isNew
+      ? '<span class="gainer-new-tag">NEW · ' + esc(row.new_entry_time || '') + '</span><span class="gainer-level new-score">' + (row.new_entry_confirmation_count || 0) + '/3</span>'
+      : '<span class="gainer-level">' + label + ' · ' + (row.confirmation_count || 0) + '/4</span>';
+    const details = isNew ? checks : (row.confirmations || []).map(esc).join(' · ') || 'No additional confirmation';
+    return '<div class="gainer-row confirm-' + level + (isNew ? ' gainer-new-entry' : '') + '" data-symbol="' + esc(row.symbol) + '" role="button" tabindex="0" title="Click to view intraday chart">' +
+      '<b class="gainer-rank">' + (index+1) + '</b><b class="gainer-symbol">' + esc(row.symbol) + '</b>' +
+      '<span class="gainer-change positive">+' + fmt(row.change_pct) + '%</span>' + status +
+      '<small class="gainer-signals">' + details + '</small></div>';
   }).join('') : '<div class="empty">No positive F&O gainers available yet.</div>';
 }
 
@@ -202,6 +212,15 @@ async function refresh() {
 $('rows').addEventListener('click', event => {
   const row = event.target.closest('tr[data-symbol]');
   if (row) openChart(row.dataset.symbol);
+});
+$('gainersRows').addEventListener('click', event => {
+  const row = event.target.closest('.gainer-row[data-symbol]');
+  if (row) openChart(row.dataset.symbol);
+});
+$('gainersRows').addEventListener('keydown', event => {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  const row = event.target.closest('.gainer-row[data-symbol]');
+  if (row) { event.preventDefault(); openChart(row.dataset.symbol); }
 });
 $('signalFilter').addEventListener('change', render);
 $('sort').addEventListener('change', render);
