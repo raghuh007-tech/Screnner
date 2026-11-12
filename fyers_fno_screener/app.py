@@ -1190,7 +1190,7 @@ def build_scan_row(symbol, quote, now=None):
         signals.append('NEAR 52W HIGH')
     if week52_momentum_ok:
         signals.append('52W HIGH +2% + 3X')
-    if not (pdh_ok and gain_ok and volume_ok):
+    if not (pdh_ok or gain_ok or volume_ok or week52_ok):
         return None
 
     return {
@@ -1208,7 +1208,7 @@ def build_scan_row(symbol, quote, now=None):
         'week52_distance_pct': week52_distance,
         'ath_distance_pct': week52_distance,
         'signals': signals,
-        'signal_count': len(signals),
+        'signal_count': sum((pdh_ok, gain_ok, volume_ok, week52_ok)),
         'history_ready': bool(intraday is not None and daily is not None),
     }
 
