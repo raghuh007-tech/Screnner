@@ -60,7 +60,7 @@ function filteredRows() {
   const filter = $('signalFilter').value;
   const sort = $('sort').value;
   const result = rows.filter(row => {
-    if (filter === 'multiple' && row.signals.length < 2) return false;
+    if (filter === 'multiple' && Number(row.signal_count || 0) < 2) return false;
     if (filter !== 'all' && filter !== 'multiple' && !row.signals.includes(filter)) return false;
     return true;
   });
