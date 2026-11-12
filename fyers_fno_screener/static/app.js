@@ -60,7 +60,11 @@ function filteredRows() {
   const filter = $('signalFilter').value;
   const sort = $('sort').value;
   const result = rows.filter(row => {
-    if (filter === 'multiple' && Number(row.signal_count || 0) < 2) return false;
+    const coreCount = Number(row.core_signal_count ?? row.signal_count ?? 0);
+    // Default view remains the strict scanner: PDH +2% momentum + 3x volume.
+    if (filter === 'all' && coreCount < 3) return false;
+    // Multiple signals means at least two of the three core conditions.
+    if (filter === 'multiple' && coreCount < 2) return false;
     if (filter !== 'all' && filter !== 'multiple' && !row.signals.includes(filter)) return false;
     return true;
   });
