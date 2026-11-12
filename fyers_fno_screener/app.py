@@ -107,6 +107,44 @@ HISTORY_DB_PATH = os.getenv(
 history_db_lock = threading.RLock()
 history_meta = {}
 
+# Per-symbol throttle for live chart candle refreshes. The chart is user-driven;
+# do not refresh all 218 symbols every minute.
+chart_history_refresh_at = {}
+chart_history_refresh_lock = threading.Lock()
+CHART_HISTORY_REFRESH_SECONDS = 45
+
+
+def refresh_chart_history(symbol):
+    """Fetch today's latest 5-minute candles for a chart currently being viewed."""
+    now = datetime.now(IST)
+    with chart_history_refresh_lock:
+        last_refresh = chart_history_refresh_at.get(symbol, 0)
+        if time.monotonic() - last_refresh < CHART_HISTORY_REFRESH_SECONDS:
+            return
+        chart_history_refresh_at[symbol] = time.monotonic()
+
+    try:
+        today = now.date()
+        recent = fetch_history(symbol, '5', today.isoformat(), today.isoformat())
+        if not recent:
+            return
+        with lock:
+            existing = cache['intraday'].get(symbol, [])
+            merged = merge_candles(existing, recent)
+            cutoff = today - timedelta(days=45)
+            merged = [
+                candle for candle in merged
+                if len(candle) >= 6
+                and datetime.fromtimestamp(int(candle[0]), IST).date() >= cutoff
+            ]
+            cache['intraday'][symbol] = merged
+        save_history(symbol, '5m', merged, today.isoformat())
+    except Exception as exc:
+        app.logger.warning('Live chart candle refresh failed for %s: %s', symbol, exc)
+        # Permit an earlier retry after a transient provider/network failure.
+        with chart_history_refresh_lock:
+            chart_history_refresh_at[symbol] = 0
+
 
 def _history_db_connect():
     folder = os.path.dirname(os.path.abspath(HISTORY_DB_PATH))
@@ -1418,6 +1456,10 @@ def chart_data(symbol):
     interval = request.args.get('interval', '5')
     if interval not in {'1', '5', '15', '60'}:
         return jsonify({'error': 'Unsupported interval'}), 400
+
+    # The persistent daily history worker is intentionally once-per-day.
+    # Refresh only the symbol whose chart is open, with a 45-second throttle.
+    refresh_chart_history(canonical_symbol)
     candles = cache['intraday'].get(canonical_symbol, [])
     if not candles:
         return jsonify({'candles': [], 'message': 'Intraday history is still loading. Please try again shortly.'})
