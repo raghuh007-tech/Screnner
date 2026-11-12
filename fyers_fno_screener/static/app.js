@@ -123,8 +123,9 @@ function render() {
 }
 function renderTopGainers(gainers) {
   const host = $('gainersRows'); if (!host) return;
-  const list = gainers || [];
-  host.innerHTML = list.length ? list.map((row, index) => {
+  const list = (gainers || []).slice(0, 10);
+  const renderColumn = (items, offset) => items.map((row, index) => {
+    const rank = offset + index + 1;
     const level = row.confirmation_level || 'none';
     const label = level === 'strong' ? 'STRONG' : level === 'moderate' ? 'MODERATE' : level === 'limited' ? 'LIMITED' : 'NO CONFIRMATION';
     const isNew = Boolean(row.is_new_entry);
@@ -136,12 +137,16 @@ function renderTopGainers(gainers) {
       : '<span class="gainer-level">' + label + ' · ' + (row.confirmation_count || 0) + '/4</span>';
     const details = isNew ? checks : (row.confirmations || []).map(esc).join(' · ') || 'No additional confirmation';
     return '<div class="gainer-row confirm-' + level + (isNew ? ' gainer-new-entry' : '') + '" data-symbol="' + esc(row.symbol) + '" role="button" tabindex="0" title="Click to view intraday chart">' +
-      '<b class="gainer-rank">' + (index+1) + '</b><b class="gainer-symbol">' + esc(row.symbol) + '</b>' + tradePlanInline(row.ltp) +
+      '<b class="gainer-rank">' + rank + '</b><b class="gainer-symbol">' + esc(row.symbol) + '</b>' + tradePlanInline(row.ltp) +
       '<span class="gainer-change positive">+' + fmt(row.change_pct) + '%</span>' + status +
       '<small class="gainer-signals">' + details + '</small></div>';
-  }).join('') : '<div class="empty">No positive F&O gainers available yet.</div>';
+  }).join('');
+  const left = list.slice(0, 5);
+  const right = list.slice(5, 10);
+  host.innerHTML = list.length
+    ? '<div class="gainers-column">' + renderColumn(left, 0) + '</div><div class="gainers-column">' + renderColumn(right, 5) + '</div>'
+    : '<div class="empty">No positive F&O gainers available yet.</div>';
 }
-
 
 function renderMarketContext(context) {
   const nifty = context?.nifty50 || {};
