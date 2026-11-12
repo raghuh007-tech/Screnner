@@ -227,14 +227,6 @@ def init_history_store():
                 )
             """)
             db.execute("""
-                CREATE TABLE IF NOT EXISTS momentum_alert_daily (
-                    trade_date TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    sent_at TEXT NOT NULL,
-                    PRIMARY KEY (trade_date, symbol)
-                )
-            """)
-            db.execute("""
                 CREATE TABLE IF NOT EXISTS top_gainer_daily_state (
                     trade_date TEXT NOT NULL,
                     symbol TEXT NOT NULL,
@@ -1150,124 +1142,6 @@ def send_new_top_gainer_alerts(gainers, now):
                 app.logger.warning('Telegram NEW Top 10 Gainer alert request failed for %s: %s', symbol, exc)
 
 
-def build_momentum_lists(quotes, symbols, now, top_gainer_symbols=None):
-    """Return only strict Fresh Momentum signals; Top 10 gainers stay in their own panel."""
-    current_ts = now.timestamp()
-    fresh = []
-    top_gainer_symbols = set(top_gainer_symbols or ())
-    for symbol in symbols:
-        quote = quotes.get(symbol)
-        if not quote:
-            continue
-        try:
-            ltp = float(quote.get('lp'))
-            daily_change = float(quote.get('chp'))
-            day_volume = float(quote.get('volume') or 0)
-        except (TypeError, ValueError):
-            continue
-        if ltp <= 0:
-            continue
-
-        history = momentum_snapshots.setdefault(symbol, deque(maxlen=12))
-        if not history or current_ts - history[-1][0] >= 45:
-            history.append((current_ts, ltp))
-        # Wait for a complete five-minute rolling observation window.
-        past = next(((ts, price) for ts, price in reversed(history) if current_ts - ts >= 300), None)
-        if not past:
-            continue
-        move_5m = (ltp / past[1] - 1) * 100
-
-        with lock:
-            intraday = cache['intraday'].get(symbol) or []
-            daily = cache['daily'].get(symbol) or {}
-        avg_same_time, _, _ = volume_ratio_for_time(intraday, now)
-        volume_ratio = day_volume / avg_same_time if avg_same_time and avg_same_time > 0 else None
-        prev_high = daily.get('prev_day_high')
-
-        # All four conditions are mandatory. PDH is a required breakout.
-        if move_5m <= 1.0 or daily_change <= 2.0:
-            continue
-        if volume_ratio is None or volume_ratio < 3.0:
-            continue
-        if prev_high is None or ltp <= float(prev_high):
-            continue
-
-        display_symbol = symbol.replace('NSE:', '').replace('-EQ', '')
-        # Keep Top 10 gainers in their dedicated panel; never duplicate them here.
-        if display_symbol.upper() in top_gainer_symbols:
-            continue
-
-        fresh.append({
-            'symbol': display_symbol,
-            'change_pct': daily_change,
-            'move_5m': move_5m,
-            'volume_ratio': volume_ratio,
-            'prev_day_high': float(prev_high),
-            'confirmations': ['5m surge >1%', 'Daily change >2%', 'Volume ≥3×', 'PDH breakout'],
-            'confirmation_count': 4,
-            'level': 'strong',
-        })
-
-    fresh.sort(key=lambda row: (row['move_5m'], row['volume_ratio']), reverse=True)
-    return {'fresh_momentum': fresh[:20]}
-
-
-def send_telegram_momentum_alerts(momentum, now):
-    """Send at most one Fresh Momentum alert per symbol per day, through 10:30 AM IST."""
-    local_now = now.astimezone(IST)
-    if (local_now.hour, local_now.minute) > (10, 30):
-        return
-    bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
-    chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
-    if not bot_token or not chat_id:
-        return
-
-    trade_date = now.astimezone(IST).date().isoformat()
-    rows = momentum.get('fresh_momentum', [])
-
-    with telegram_alert_lock:
-        for row in rows:
-            symbol = row['symbol']
-            with _history_db_connect() as db:
-                already_sent = db.execute(
-                    "SELECT 1 FROM momentum_alert_daily WHERE trade_date=? AND symbol=?",
-                    (trade_date, symbol)
-                ).fetchone()
-            if already_sent:
-                continue
-
-            volume = f"{row['volume_ratio']:.1f}x" if row.get('volume_ratio') is not None else 'N/A'
-            message = (
-                f"⚡ FRESH MOMENTUM\\n"
-                f"{symbol} | 5m: +{row['move_5m']:.2f}% | Day: {row['change_pct']:+.2f}%\\n"
-                f"Volume: {volume} | PDH breakout: YES\\n"
-                f"{now.strftime('%H:%M:%S IST')}\\n"
-                f"https://fyers-fno-live-screener.onrender.com"
-            )
-            try:
-                response = requests.post(
-                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                    json={'chat_id': chat_id, 'text': message, 'disable_web_page_preview': True},
-                    timeout=8,
-                )
-                payload = response.json() if response.content else {}
-                if response.status_code == 200 and payload.get('ok') is True:
-                    # Unique (date, symbol) key prevents repeat alerts across restarts.
-                    with _history_db_connect() as db:
-                        db.execute(
-                            "INSERT OR IGNORE INTO momentum_alert_daily(trade_date, symbol, sent_at) VALUES (?, ?, ?)",
-                            (trade_date, symbol, now.isoformat())
-                        )
-                    app.logger.info('Telegram Fresh Momentum alert delivered for %s on %s', symbol, trade_date)
-                else:
-                    app.logger.warning(
-                        'Telegram Fresh Momentum alert failed for %s: HTTP %s (%s)',
-                        symbol, response.status_code, payload.get('description', 'no confirmation')
-                    )
-            except (requests.RequestException, ValueError) as exc:
-                app.logger.warning('Telegram Fresh Momentum alert request failed for %s: %s', symbol, exc)
-
-
 def build_scan_row(symbol, quote, now=None):
     now = now or datetime.now(IST)
     ltp = quote.get('lp')
@@ -1544,13 +1418,10 @@ def scan():
         top_gainers = mark_new_top_gainer_entries(top_gainers, now)
         send_new_top_gainer_alerts(top_gainers, now)
         top_gainer_symbols = {row['symbol'].upper() for row in top_gainers}
-        momentum = build_momentum_lists(quotes, symbols, now, top_gainer_symbols)
-        send_telegram_momentum_alerts(momentum, now)
         context = market_context()
         return jsonify({
             'rows': rows,
             'top_gainers': top_gainers,
-            'momentum': momentum,
             'coverage': len(quotes),
             'quote_volume_nonzero': sum(1 for quote in quotes.values() if quote.get('volume') not in (None, 0)),
             'universe': len(symbols),
