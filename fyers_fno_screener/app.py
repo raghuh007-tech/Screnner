@@ -196,6 +196,10 @@ def init_history_store():
                     PRIMARY KEY (trade_date, symbol)
                 )
             """)
+            # Retain compatibility with the legacy active-signal table.
+            alert_rows = db.execute(
+                "SELECT kind, symbol FROM momentum_alert_active"
+            ).fetchall()
             rows = db.execute(
                 "SELECT symbol, timeframe, candles_json FROM candle_cache"
             ).fetchall()
