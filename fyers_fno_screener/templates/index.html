@@ -10,7 +10,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <title>Oldpal Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css?v=15">
+  <link rel="stylesheet" href="/static/style.css?v=16">
 </head>
 <body>
 <div class="shell">
@@ -45,7 +45,7 @@
     </article>
   </section>
 
-  <section class="panel gainers-panel"><div class="panel-head"><div><h2>Top 10 F&O gainers today</h2><p>Ranked by daily gain · colour shows confirmation strength</p></div></div><div id="gainersRows" class="gainers-list"><div class="empty">Waiting for market data.</div></div></section>
+  <section class="panel gainers-panel"><div class="panel-head"><div><h2>Top 10 F&O gainers today</h2><p>Ranked by daily gain · colour shows confirmation strength</p></div></div><div id="gainersTabs" class="gainers-tabs" role="tablist" aria-label="Top 10 gainer ranks"></div><div id="gainersRows" class="gainers-list"><div class="empty">Waiting for market data.</div></div></section>
 
   <section class="panel momentum-panel fresh-momentum-panel"><div class="panel-head"><div><h2>⚡ Fresh momentum</h2><p>All 4 mandatory filters: 5m >1% · Day >2% · Volume ≥3× · Above PDH</p></div><span class="live-pill">LIVE</span></div><div id="freshMomentum" class="momentum-list"><div class="empty">Building 5-minute baseline…</div></div></section>
 
@@ -111,6 +111,6 @@
 <div class="chart-timeframes"><button data-tf="1" type="button">1m</button><button class="active" data-tf="5" type="button">5m</button><button data-tf="15" type="button">15m</button><button data-tf="60" type="button">1h</button></div>
 <div id="stockChart" class="stock-chart"></div><div id="chartMessage" class="chart-message">Loading candles and volume…</div>
 </section></div>
-<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=14"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=15"></script>
 </body>
 </html>
