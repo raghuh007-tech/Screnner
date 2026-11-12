@@ -101,14 +101,16 @@ function render() {
   $('mobileRows').innerHTML = matches.length ? matches.map(row => {
     const changeClass = Number(row.change_pct) >= 0 ? 'positive' : 'negative';
     const checks = [
-      row.prev_day_high != null && Number(row.ltp) > Number(row.prev_day_high) ? 'PDH crossed' : null,
-      row.week52_distance_pct != null && Number(row.week52_distance_pct) <= 3 ? `52W gap ${fmt(row.week52_distance_pct)}%` : null,
-      row.volume_ratio != null && Number(row.volume_ratio) >= 3 ? `Volume ${fmt(row.volume_ratio)}×` : null
-    ].filter(Boolean);
+      ['PDH BREAKOUT', 'PDH'],
+      ['+2% MOMENTUM', '2%'],
+      ['3X VOLUME', '3× VOL'],
+      ['NEAR 52W HIGH', '52W']
+    ];
+    const active = checks.filter(([signal]) => (row.signals || []).includes(signal));
+    const compactTags = active.map(([, label]) => `<span class="compact-confirm">${label}</span>`).join('');
     return `<button type="button" class="stock-row" data-symbol="${esc(row.symbol)}">
       <span class="stock-row-main"><b class="stock-row-name">${esc(row.symbol)}</b><span class="stock-row-price">${fmt(row.ltp)}</span><span class="stock-row-change ${changeClass}">${formatChange(row.change_pct)}</span><span class="row-chevron">›</span></span>
-      <span class="stock-row-signals">${badges(row.signals)}</span>
-      <span class="stock-row-details">${checks.length ? checks.map(x => `<span>${esc(x)}</span>`).join('') : '<span>Other scanner confirmation</span>'}</span>
+      <span class="stock-row-confirmations">${compactTags}<b class="confirmation-count">${active.length}/4</b></span>
     </button>`;
   }).join('') : '<div class="empty">No stocks currently match these filters.</div>';
 }
@@ -239,7 +241,7 @@ $('exportSymbols').addEventListener('click', async () => {
   setInterval(updateStatus, 30000);
 })();
 
-let chartInstance=null, activeChartSymbol='', activeTimeframe='5';
+let chartInstance=null, activeChartSymbol='', activeTimeframe='5'; // Default: today's 5-minute intraday chart
 function calcEma(points,n){let prev=null,k=2/(n+1);return points.map(p=>{prev=prev===null?p.value:p.value*k+prev*(1-k);return {time:p.time,value:prev};});}
 function closeChart(){document.getElementById('chartModal').classList.remove('open');if(chartInstance){chartInstance.remove();chartInstance=null;}}
 document.getElementById('closeChart').addEventListener('click',closeChart);
