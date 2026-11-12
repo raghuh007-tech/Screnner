@@ -363,6 +363,8 @@ tbody tr:hover{background:#18283a}
 @media(max-width:760px){
  .stock-row .trade-plan{gap:3px;font-size:7px;margin-left:2px}
  .stock-row .trade-plan b,.stock-row .trade-plan span{font-size:7px}
+}
+
 /* Top gainers: keep trade plan, status and confirmations on separate grid rows */
 .gainers-list{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
 .gainers-column{min-width:0}
@@ -381,6 +383,4 @@ tbody tr:hover{background:#18283a}
   .gainer-change{grid-column:3;grid-row:1}
   .gainer-status{grid-column:2 / -1;grid-row:3;flex-wrap:wrap}
   .gainer-row .gainer-signals{grid-column:2 / -1;grid-row:4;font-size:7px;white-space:normal}
-}
- .gainer-tabs{padding-bottom:8px}
 }
