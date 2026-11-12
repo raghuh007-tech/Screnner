@@ -115,16 +115,13 @@ function renderTopGainers(gainers) {
 
 
 function renderMomentum(data) {
-  const draw = (id, items, freshMode) => {
-    const host = $(id); if (!host) return;
-    host.innerHTML = items?.length ? items.map((r,i) => {
-      const cls = r.level === 'strong' ? 'mom-strong' : r.level === 'developing' ? 'mom-developing' : 'mom-early';
-      const checks = (r.confirmations || []).map(esc).join(' · ');
-      return '<div class="momentum-row '+cls+'"><span class="mom-rank">'+(i+1)+'</span><b class="mom-symbol">'+esc(r.symbol)+'</b><span class="mom-daily">'+formatChange(r.change_pct)+'</span><strong class="mom-move">+'+fmt(r.move_5m)+'%</strong><span class="mom-checks">'+(checks || 'Building confirmations')+'</span></div>';
-    }).join('') : '<div class="empty">'+(freshMode ? 'No newly confirmed momentum yet.' : 'Waiting for positive 5-minute moves.')+'</div>';
-  };
-  draw('freshMomentum', data?.fresh_momentum, true);
-  draw('strongMomentum', data?.strongest_momentum, false);
+  const host = $('freshMomentum');
+  if (!host) return;
+  const items = data?.fresh_momentum || [];
+  host.innerHTML = items.length ? items.map((r,i) => {
+    const checks = (r.confirmations || []).map(esc).join(' · ');
+    return '<div class="momentum-row mom-strong"><span class="mom-rank">'+(i+1)+'</span><b class="mom-symbol">'+esc(r.symbol)+'</b><span class="mom-daily">'+formatChange(r.change_pct)+'</span><strong class="mom-move">+'+fmt(r.move_5m)+'%</strong><span class="mom-checks">'+checks+' · '+fmt(r.volume_ratio)+'×</span></div>';
+  }).join('') : '<div class="empty">No stocks meet all four Fresh Momentum filters yet.</div>';
 }
 
 function renderMarketContext(context) {
@@ -204,7 +201,6 @@ $('exportSymbols').addEventListener('click', async () => {
   };
   (latestScan.top_gainers || []).forEach(row => add(row.symbol));
   (latestScan.momentum?.fresh_momentum || []).forEach(row => add(row.symbol));
-  (latestScan.momentum?.strongest_momentum || []).forEach(row => add(row.symbol));
   (latestScan.rows || []).filter(row => ['Bullish','Bearish'].includes(row.sentiment)).forEach(row => add(row.symbol));
   const exportText = [...symbols].sort().join('\\n');
   if (!exportText) {
