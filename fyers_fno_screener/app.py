@@ -1384,6 +1384,22 @@ def callback():
 
 
 
+
+@app.route('/api/fyers-test-status')
+def fyers_test_status():
+    """Report whether the separate FYERS test token was saved; never expose the token."""
+    try:
+        with history_db_lock:
+            with _history_db_connect() as db:
+                row = db.execute(
+                    "SELECT 1 FROM app_meta WHERE meta_key = 'fyers_test_access_token' AND length(meta_value) > 0"
+                ).fetchone()
+        return jsonify({'connected': bool(row)})
+    except Exception as exc:
+        app.logger.warning('Could not read separate FYERS test status: %s', exc)
+        return jsonify({'connected': False, 'error': 'Could not verify FYERS token storage.'}), 500
+
+
 @app.route('/api/status')
 def status():
     with lock:
