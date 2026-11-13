@@ -23,6 +23,9 @@
     <div class="actions">
       <span id="status" class="status">Checking connection…</span>
       <a class="connect" href="/connect-broker">Connect {{ broker_name }}</a>
+      {% if broker_name == 'Zerodha Kite' %}
+      <a class="connect" href="/connect-fyers">Connect FYERS</a>
+      {% endif %}
       <form method="post" action="/logout"><button class="logout" type="submit">Lock</button></form>
     </div>
   </header>
