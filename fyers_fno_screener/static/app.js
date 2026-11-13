@@ -37,6 +37,17 @@ async function updateStatus() {
   try {
     const data = await api('/api/status');
     const brokerName = data.broker === 'zerodha' ? 'Zerodha Kite' : 'FYERS';
+    const fyersIndicator = $('fyersTestStatus');
+    if (fyersIndicator) {
+      try {
+        const fyersData = await api('/api/fyers-test-status');
+        fyersIndicator.textContent = fyersData.connected ? 'FYERS: Connected' : 'FYERS: Not connected';
+        fyersIndicator.className = fyersData.connected ? 'status online' : 'status offline';
+      } catch (_) {
+        fyersIndicator.textContent = 'FYERS: Status unavailable';
+        fyersIndicator.className = 'status offline';
+      }
+    }
     $('status').textContent = data.connected ? `${brokerName} connected` : `${brokerName} not connected`;
     $('status').className = data.connected ? 'status online' : 'status offline';
     if (data.error) $('feed').textContent = data.error;
