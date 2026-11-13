@@ -33,6 +33,41 @@ function formatChange(value) {
   const n = Number(value);
   return `${n > 0 ? '+' : ''}${fmt(n)}%`;
 }
+async function runFyersDataTest() {
+  const button = $('testFyersData');
+  const output = $('fyersDataTest');
+  if (!button || !output) return;
+  button.disabled = true;
+  button.textContent = 'Testing…';
+  output.textContent = 'Checking quotes and 5-minute history…';
+  output.className = 'status offline';
+  try {
+    const response = await fetch('/api/fyers-test-data', {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+    const data = await response.json();
+    const quote = data.quote || {};
+    const history = data.history || {};
+    output.textContent = `Quotes: ${quote.ok ? 'PASS' : 'FAIL'} · History: ${history.ok ? 'PASS' : 'FAIL'}`;
+    output.className = data.ok ? 'status online' : 'status offline';
+    if (data.ok) {
+      output.title = `SBIN LTP: ${quote.ltp} · ${history.candles} candles checked`;
+    } else {
+      output.title = [quote.message, history.message, data.message].filter(Boolean).join(' | ');
+    }
+  } catch (_) {
+    output.textContent = 'Data test failed';
+    output.title = 'Could not complete FYERS data test.';
+    output.className = 'status offline';
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Test FYERS Data';
+  }
+}
+const fyersTestButton = $('testFyersData');
+if (fyersTestButton) fyersTestButton.addEventListener('click', runFyersDataTest);
+
 async function updateStatus() {
   try {
     const data = await api('/api/status');
