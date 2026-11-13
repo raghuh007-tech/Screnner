@@ -294,8 +294,13 @@ def init_history_store():
                 cache['sector_updated_at'] = value
             elif key == 'sector_retry_after':
                 cache['sector_retry_after'] = value
-            elif key == 'broker_access_token' and not TOKEN:
-                # The Render persistent disk keeps the broker session across daily suspends.
+            elif BROKER_PROVIDER == 'zerodha' and key == 'broker_access_token' and not TOKEN:
+                # Keep the existing Zerodha token isolated for rollback/fallback.
+                globals()['TOKEN'] = value
+            elif BROKER_PROVIDER == 'fyers' and key == 'fyers_access_token' and not TOKEN:
+                globals()['TOKEN'] = value
+            elif BROKER_PROVIDER == 'fyers' and key == 'fyers_test_access_token' and not TOKEN:
+                # Promote the separately validated FYERS market-data token on first switch.
                 globals()['TOKEN'] = value
 
         app.logger.info(
@@ -1371,7 +1376,7 @@ def callback():
             db.execute(
                 "INSERT INTO app_meta (meta_key, meta_value) VALUES (?, ?) "
                 "ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value",
-                ('broker_access_token', TOKEN),
+                ('broker_access_token' if BROKER_PROVIDER == 'zerodha' else 'fyers_access_token', TOKEN),
             )
 
     cache['connected'] = True
