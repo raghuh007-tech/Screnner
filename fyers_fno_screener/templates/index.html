@@ -26,6 +26,8 @@
       {% if broker_name == 'Zerodha Kite' %}
       <span id="fyersTestStatus" class="status offline">FYERS: checking…</span>
       <a class="connect" href="/connect-fyers">Connect FYERS</a>
+      <button id="testFyersData" class="connect" type="button">Test FYERS Data</button>
+      <span id="fyersDataTest" class="status offline" aria-live="polite">Data test: not run</span>
       {% endif %}
       <form method="post" action="/logout"><button class="logout" type="submit">Lock</button></form>
     </div>
