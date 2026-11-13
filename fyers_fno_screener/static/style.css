@@ -390,18 +390,19 @@ tbody tr:hover{background:#18283a}
 @media(max-width:760px){
   .stock-row{
     display:grid;
-    grid-template-columns:minmax(0,1fr) auto;
-    gap:3px;
+    grid-template-columns:minmax(0,1fr);
+    gap:4px;
     width:100%;
     min-width:0;
     min-height:0;
-    padding:9px 2px;
+    padding:8px 2px;
   }
   .stock-row-main{
     display:grid;
-    grid-template-columns:minmax(62px,.9fr) minmax(112px,1.45fr) auto auto auto;
+    grid-template-columns:minmax(58px,.85fr) minmax(112px,1.45fr) auto auto auto;
     align-items:center;
     gap:5px;
+    width:100%;
     min-width:0;
     white-space:nowrap;
   }
@@ -420,12 +421,12 @@ tbody tr:hover{background:#18283a}
   .stock-row-price{font-size:9px}
   .stock-row-change{font-size:9px}
   .stock-row-main .confirmation-count{font-size:8px;margin:0}
-  .stock-row-confirmations{display:flex;align-items:center;gap:3px;min-width:0;overflow:hidden;white-space:nowrap}
+  .stock-row-confirmations{grid-column:1;display:flex;align-items:center;gap:3px;min-width:0;overflow:hidden;white-space:nowrap}
   .stock-row-confirmations .compact-confirm{font-size:7px;padding:2px 4px}
   .row-chevron{display:none}
 }
 @media(max-width:380px){
-  .stock-row-main{grid-template-columns:minmax(54px,.8fr) minmax(100px,1.4fr) auto auto auto;gap:3px}
+  .stock-row-main{grid-template-columns:minmax(52px,.8fr) minmax(104px,1.4fr) auto auto auto;gap:3px}
   .stock-row .trade-plan,
   .stock-row .trade-plan b,
   .stock-row .trade-plan span{font-size:6.5px}
