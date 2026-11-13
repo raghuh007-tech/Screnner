@@ -384,3 +384,50 @@ tbody tr:hover{background:#18283a}
   .gainer-status{grid-column:2 / -1;grid-row:3;flex-wrap:wrap}
   .gainer-row .gainer-signals{grid-column:2 / -1;grid-row:4;font-size:7px;white-space:normal}
 }
+
+
+/* Compact single-line mobile opportunity rows */
+@media(max-width:760px){
+  .stock-row{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    gap:3px;
+    width:100%;
+    min-width:0;
+    min-height:0;
+    padding:9px 2px;
+  }
+  .stock-row-main{
+    display:grid;
+    grid-template-columns:minmax(62px,.9fr) minmax(112px,1.45fr) auto auto auto;
+    align-items:center;
+    gap:5px;
+    min-width:0;
+    white-space:nowrap;
+  }
+  .stock-row-name{font-size:10px;min-width:0}
+  .stock-row .trade-plan{
+    display:flex;
+    align-items:center;
+    gap:4px;
+    min-width:0;
+    white-space:nowrap;
+    font-size:7px;
+    line-height:1.2;
+  }
+  .stock-row .trade-plan b,
+  .stock-row .trade-plan span{font-size:7px;white-space:nowrap}
+  .stock-row-price{font-size:9px}
+  .stock-row-change{font-size:9px}
+  .stock-row-main .confirmation-count{font-size:8px;margin:0}
+  .stock-row-confirmations{display:flex;align-items:center;gap:3px;min-width:0;overflow:hidden;white-space:nowrap}
+  .stock-row-confirmations .compact-confirm{font-size:7px;padding:2px 4px}
+  .row-chevron{display:none}
+}
+@media(max-width:380px){
+  .stock-row-main{grid-template-columns:minmax(54px,.8fr) minmax(100px,1.4fr) auto auto auto;gap:3px}
+  .stock-row .trade-plan,
+  .stock-row .trade-plan b,
+  .stock-row .trade-plan span{font-size:6.5px}
+  .stock-row-name{font-size:9px}
+}
