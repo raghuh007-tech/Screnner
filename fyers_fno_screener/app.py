@@ -386,7 +386,16 @@ def history_due(symbol, today=None):
     today = today or datetime.now(IST).date()
     meta = history_meta.get(symbol, {})
     retry_after = meta.get('retry_after')
-    if retry_after:
+    last_error = str(meta.get('last_error') or '')
+    # Allow recovery from the previous undefined-history-variable bug immediately
+    # after deployment instead of waiting out its generic six-hour cooldown.
+    fixed_history_name_error = (
+        "not defined" in last_error
+        and any(name in last_error for name in (
+            'daily_exists', 'daily_existing', 'intraday_exists', 'intraday_existing'
+        ))
+    )
+    if retry_after and not fixed_history_name_error:
         try:
             if datetime.fromisoformat(retry_after) > datetime.now(IST):
                 return False
@@ -837,6 +846,12 @@ def warm_history_for_symbol(symbol):
     """Backfill once, then refresh only recent candles once per calendar day."""
     today = datetime.now(IST).date()
     meta = history_meta.get(symbol, {})
+    # Snapshot existing in-memory history before deciding which provider calls are needed.
+    with lock:
+        daily_exists = symbol in cache['daily']
+        daily_existing = cache['daily'].get(symbol)
+        intraday_exists = symbol in cache['intraday']
+        intraday_existing = cache['intraday'].get(symbol)
 
     # One year of daily candles is enough for rolling 52-week high.
     # Refresh the window once per day so old highs roll off correctly.
