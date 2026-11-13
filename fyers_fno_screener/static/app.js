@@ -120,8 +120,8 @@ function render() {
     const active = checks.filter(([signal]) => (row.signals || []).includes(signal));
     const compactTags = active.map(([, label]) => `<span class="compact-confirm">${label}</span>`).join('');
     return `<button type="button" class="stock-row" data-symbol="${esc(row.symbol)}">
-      <span class="stock-row-main"><b class="stock-row-name">${esc(row.symbol)}</b>${tradePlanInline(row.ltp)}<span class="stock-row-price">${fmt(row.ltp)}</span><span class="stock-row-change ${changeClass}">${formatChange(row.change_pct)}</span><span class="row-chevron">›</span></span>
-      <span class="stock-row-confirmations">${compactTags}<b class="confirmation-count">${active.length}/4</b></span>
+      <span class="stock-row-main"><b class="stock-row-name">${esc(row.symbol)}</b>${tradePlanInline(row.ltp)}<span class="stock-row-price">${fmt(row.ltp)}</span><span class="stock-row-change ${changeClass}">${formatChange(row.change_pct)}</span><b class="confirmation-count">${active.length}/4</b></span>
+      <span class="stock-row-confirmations">${compactTags}</span>
     </button>`;
   }).join('') : '<div class="empty">No stocks currently match these filters.</div>';
 }
