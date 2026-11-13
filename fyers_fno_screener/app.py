@@ -1616,7 +1616,7 @@ def scan():
             'universe': len(symbols),
             'matched': len(rows),
             'pd_breakouts': sum('PDH BREAKOUT' in row['signals'] for row in rows),
-            'momentum_count': sum('+2% MOMENTUM' in row['signals'] for row in rows),
+            'momentum_count': sum('+2% MOMENTUM' in row['signals'] and '3X VOLUME' in row['signals'] for row in rows),
             'near_52w': sum('NEAR 52W HIGH' in row['signals'] for row in rows),
             'week52_momentum': sum('52W HIGH +2% + 3X' in row['signals'] for row in rows),
             'sentiment': sentiments,
