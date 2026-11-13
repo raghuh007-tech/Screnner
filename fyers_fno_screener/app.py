@@ -1400,6 +1400,84 @@ def fyers_test_status():
         return jsonify({'connected': False, 'error': 'Could not verify FYERS token storage.'}), 500
 
 
+@app.route('/api/fyers-test-data', methods=['POST'])
+def fyers_test_data():
+    """Test FYERS quote and candle access using the separately stored test token."""
+    try:
+        with history_db_lock:
+            with _history_db_connect() as db:
+                row = db.execute(
+                    "SELECT meta_value FROM app_meta WHERE meta_key = 'fyers_test_access_token'"
+                ).fetchone()
+        if not row or not row[0]:
+            return jsonify({'ok': False, 'message': 'FYERS is not authenticated yet.'}), 400
+
+        headers = {
+            'Authorization': f'{FYERS_APP_ID}:{row[0]}',
+            'Content-Type': 'application/json',
+        }
+        result = {'quote': {'ok': False}, 'history': {'ok': False}}
+        quote_response = requests.get(
+            FYERS_DATA_ROOT + '/quotes',
+            headers=headers,
+            params={'symbols': 'NSE:SBIN-EQ'},
+            timeout=20,
+        )
+        quote_data = quote_response.json()
+        quote_item = next((item for item in quote_data.get('d', [])
+                           if item.get('n') == 'NSE:SBIN-EQ' and item.get('s') == 'ok'), None)
+        quote_values = (quote_item or {}).get('v') or {}
+        if quote_response.ok and quote_values.get('lp') is not None:
+            result['quote'] = {
+                'ok': True,
+                'symbol': 'NSE:SBIN-EQ',
+                'ltp': quote_values.get('lp'),
+                'change_pct': quote_values.get('chp'),
+            }
+        else:
+            result['quote'] = {
+                'ok': False,
+                'message': (quote_data.get('message') or 'Quote permission or symbol validation failed.')[:180],
+            }
+
+        end_date = datetime.now(IST).date() - timedelta(days=1)
+        start_date = end_date - timedelta(days=5)
+        history_response = requests.get(
+            FYERS_DATA_ROOT + '/history',
+            headers=headers,
+            params={
+                'symbol': 'NSE:SBIN-EQ',
+                'resolution': '5',
+                'date_format': '1',
+                'range_from': start_date.isoformat(),
+                'range_to': end_date.isoformat(),
+                'cont_flag': '0',
+            },
+            timeout=25,
+        )
+        history_data = history_response.json()
+        candles = history_data.get('candles') or []
+        if history_response.ok and history_data.get('s') == 'ok' and candles:
+            result['history'] = {
+                'ok': True,
+                'symbol': 'NSE:SBIN-EQ',
+                'candles': len(candles),
+                'from': start_date.isoformat(),
+                'to': end_date.isoformat(),
+            }
+        else:
+            result['history'] = {
+                'ok': False,
+                'message': (history_data.get('message') or 'Historical data permission or request validation failed.')[:180],
+            }
+        result['ok'] = result['quote']['ok'] and result['history']['ok']
+        result['message'] = 'Both FYERS market-data tests passed.' if result['ok'] else 'One or more FYERS market-data tests failed.'
+        return jsonify(result)
+    except Exception as exc:
+        app.logger.warning('FYERS test-data check failed: %s', exc)
+        return jsonify({'ok': False, 'message': 'FYERS test failed. Check server logs for details.'}), 502
+
+
 @app.route('/api/status')
 def status():
     with lock:
