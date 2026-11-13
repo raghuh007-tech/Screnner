@@ -1272,7 +1272,6 @@ def home():
 
 
 @app.route('/connect-broker')
-@app.route('/connect-fyers')
 def connect_broker():
     """Start OAuth for the selected broker; the browser never receives the app secret."""
     if not APP_ID or not APP_SECRET or not REDIRECT_URI:
@@ -1290,11 +1289,48 @@ def connect_broker():
     return redirect('https://api-t1.fyers.in/api/v3/generate-authcode?' + urlencode(params))
 
 
+@app.route('/connect-fyers')
+def connect_fyers_test():
+    """Authenticate FYERS separately without changing the active Zerodha feed."""
+    if not FYERS_APP_ID or not FYERS_APP_SECRET or not FYERS_REDIRECT_URI:
+        return 'Set FYERS_APP_ID, FYERS_APP_SECRET and FYERS_REDIRECT_URI in the server environment.', 400
+    state = secrets.token_urlsafe(24)
+    session['fyers_test_oauth_state'] = state
+    params = {
+        'client_id': FYERS_APP_ID,
+        'redirect_uri': FYERS_REDIRECT_URI,
+        'response_type': 'code',
+        'state': state,
+    }
+    return redirect('https://api-t1.fyers.in/api/v3/generate-authcode?' + urlencode(params))
+
+
 @app.route('/callback')
 def callback():
     global TOKEN
-    expected = session.pop('broker_oauth_state', None)
     state = request.args.get('state')
+    fyers_test_state = session.pop('fyers_test_oauth_state', None)
+    if fyers_test_state and secrets.compare_digest(state or '', fyers_test_state):
+        auth_code = request.args.get('auth_code')
+        if not auth_code:
+            return 'FYERS did not return an auth_code. Restart FYERS connection.', 400
+        app_hash = hashlib.sha256(f'{FYERS_APP_ID}:{FYERS_APP_SECRET}'.encode()).hexdigest()
+        response = requests.post(FYERS_ROOT + '/api/v3/validate-authcode', json={
+            'grant_type': 'authorization_code', 'appIdHash': app_hash, 'code': auth_code
+        }, timeout=25)
+        data = response.json()
+        if response.status_code >= 400 or data.get('s') != 'ok' or not data.get('access_token'):
+            return f"FYERS token exchange failed: {data.get('message', 'Unknown error')}", 400
+        with history_db_lock:
+            with _history_db_connect() as db:
+                db.execute(
+                    "INSERT INTO app_meta (meta_key, meta_value) VALUES (?, ?) "
+                    "ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value",
+                    ('fyers_test_access_token', data['access_token']),
+                )
+        return redirect(url_for('home') + '?fyers_connected=1')
+
+    expected = session.pop('broker_oauth_state', None)
     if not expected or not secrets.compare_digest(state or '', expected):
         return 'Broker login failed: missing or invalid OAuth state. Return to the private dashboard and reconnect.', 400
 
