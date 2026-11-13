@@ -235,6 +235,7 @@ async function refresh() {
     renderTopGainers(data.top_gainers || []);
     $('universe').textContent = fmt(data.universe,0);
     $('pdhCount').textContent = fmt(data.pd_breakouts,0);
+    $('momentumCount').textContent = fmt(data.momentum_count,0);
     $('athCount').textContent = fmt(data.near_52w,0);
     $('athMomentumCount').textContent = fmt(data.week52_momentum,0);
     renderMarketContext(data.market_context);
