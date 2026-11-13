@@ -697,6 +697,35 @@ def get_symbol_universe():
         if len(row) > ticker_idx and row[ticker_idx].strip().upper().startswith('NSE:')
         and row[ticker_idx].strip().upper().endswith('-EQ')
     }
+    # FYERS index symbols are compact (for example NSE:NIFTY50-INDEX),
+    # unlike the spaced Kite index names.
+    fyers_index_symbols = {
+        row[ticker_idx].strip().upper()
+        for row in cm_data
+        if len(row) > ticker_idx and row[ticker_idx].strip().upper().startswith('NSE:')
+        and row[ticker_idx].strip().upper().endswith('-INDEX')
+    }
+    def compact_index_name(symbol):
+        return symbol.removeprefix('NSE:').removesuffix('-INDEX').replace(' ', '').replace('&', '').replace('-', '')
+    wanted_indices = {'NIFTY50': ('NIFTY 50', 'Nifty 50')}
+    wanted_indices.update({
+        key.replace(' ', '').replace('&', '').replace('-', ''): (key, label)
+        for key, label in SECTOR_INDEX_LABELS.items()
+    })
+    market_symbols, sector_labels = [], {}
+    for symbol in sorted(fyers_index_symbols):
+        match = wanted_indices.get(compact_index_name(symbol))
+        if not match:
+            continue
+        label_key, label = match
+        market_symbols.append(symbol)
+        if label_key != 'NIFTY 50':
+            sector_labels[symbol] = label
+    with lock:
+        cache['market_index_symbols'] = market_symbols
+        cache['sector_index_labels'] = sector_labels
+    app.logger.info('FYERS index symbols discovered: %d; sector indices: %d',
+                    len(market_symbols), len(sector_labels))
     result = set()
     for row in fo_data:
         if len(row) <= underlying_idx:
@@ -749,12 +778,19 @@ def refresh_quotes(symbols):
                 else:
                     result[key + '-EQ'] = normalized
     else:
-        for start in range(0, len(symbols), 50):
-            batch = symbols[start:start + 50]
+        with lock:
+            market_symbols = list(cache.get('market_index_symbols', []))
+        requested = list(symbols) + market_symbols
+        for start in range(0, len(requested), 50):
+            batch = requested[start:start + 50]
             payload = broker_get('/quotes', {'symbols': ','.join(batch)}, priority=True)
             for item in payload.get('d', []):
                 if item.get('s') == 'ok':
-                    result[item.get('n', '')] = item.get('v', {})
+                    symbol = item.get('n', '')
+                    if symbol in market_symbols:
+                        market_result[symbol] = item.get('v', {})
+                    else:
+                        result[symbol] = item.get('v', {})
     with lock:
         cache['quotes'].update(result)
         cache['market_quotes'] = market_result
