@@ -1975,6 +1975,53 @@ init_backtest_store()
 _backtest_restore_state()
 
 
+@app.route('/api/backtest/test-history')
+def backtest_test_history():
+    """Read-only single-stock check of broker daily and 5-minute candle access."""
+    if not TOKEN:
+        return jsonify({'ok': False, 'error': f'Connect {BROKER_PROVIDER.upper()} first.'}), 400
+    if BROKER_PROVIDER != 'zerodha':
+        return jsonify({'ok': False, 'error': 'This diagnostic is intended for the active Zerodha connection.'}), 400
+    try:
+        symbols = list(cache.get('symbols') or [])
+        if not symbols:
+            symbols = get_symbol_universe()
+            with lock:
+                cache['symbols'] = symbols
+        symbol = next((s for s in symbols if s.split(':')[-1].replace('-EQ', '') == 'SBIN'), None)
+        if not symbol:
+            return jsonify({'ok': False, 'error': 'SBIN is not present in the loaded F&O universe.'}), 503
+        today = datetime.now(IST).date()
+        start = today - timedelta(days=7)
+        end = today - timedelta(days=1)
+        daily = fetch_history(symbol, 'D', start.isoformat(), end.isoformat())
+        intraday = fetch_history(symbol, '5', start.isoformat(), end.isoformat())
+        def candle_summary(candles):
+            if not candles:
+                return {'count': 0, 'first': None, 'last': None}
+            return {
+                'count': len(candles),
+                'first': datetime.fromtimestamp(int(candles[0][0]), IST).isoformat(),
+                'last': datetime.fromtimestamp(int(candles[-1][0]), IST).isoformat(),
+            }
+        daily_summary = candle_summary(daily)
+        intraday_summary = candle_summary(intraday)
+        ok = daily_summary['count'] > 0 and intraday_summary['count'] > 0
+        app.logger.info(
+            'Backtest single-stock history diagnostic: symbol=%s daily=%d intraday=%d ok=%s',
+            symbol, daily_summary['count'], intraday_summary['count'], ok
+        )
+        return jsonify({
+            'ok': ok, 'provider': BROKER_PROVIDER, 'symbol': symbol,
+            'range_from': start.isoformat(), 'range_to': end.isoformat(),
+            'daily': daily_summary, 'five_minute': intraday_summary,
+            'message': 'Both candle intervals returned data.' if ok else 'One or both intervals returned no candles.',
+        }), (200 if ok else 502)
+    except Exception as exc:
+        app.logger.warning('Backtest single-stock history diagnostic failed: %s', exc)
+        return jsonify({'ok': False, 'error': str(exc)}), 502
+
+
 @app.route('/api/backtest/status')
 def backtest_status():
     return jsonify(_backtest_status_payload())
