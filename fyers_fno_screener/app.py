@@ -1746,15 +1746,30 @@ def _backtest_chunk_done(db, symbol, timeframe, start_text, end_text):
 
 
 def _backtest_store_chunk(symbol, timeframe, start_text, end_text, candles):
+    # A real empty list is a valid zero-bar response (e.g. market holidays).
+    # None, non-list payloads, or non-empty payloads with no valid bars are errors.
+    if not isinstance(candles, list):
+        raise ValueError('Historical provider returned a non-list candle payload.')
     sessions = {}
-    for candle in candles or []:
+    invalid_rows = 0
+    for candle in candles:
         try:
             if len(candle) < 6:
+                invalid_rows += 1
                 continue
-            session_date = datetime.fromtimestamp(int(candle[0]), IST).date().isoformat()
+            epoch = int(candle[0])
+            values = [float(candle[index]) for index in range(1, 6)]
+            if not all(math.isfinite(value) for value in values):
+                invalid_rows += 1
+                continue
+            session_date = datetime.fromtimestamp(epoch, IST).date().isoformat()
             sessions.setdefault(session_date, []).append(candle)
         except (TypeError, ValueError, OverflowError, OSError):
-            continue
+            invalid_rows += 1
+    if candles and not sessions:
+        raise ValueError('Historical provider returned candles, but none were valid.')
+    if invalid_rows:
+        app.logger.warning('Skipped %d invalid historical candles for %s (%s)', invalid_rows, symbol, timeframe)
     with history_db_lock:
         with _history_db_connect() as db:
             for session_date, rows in sessions.items():
@@ -1802,7 +1817,7 @@ def _backtest_worker(symbols, trade_start, trade_end):
     global backtest_worker_running
     daily_start = trade_start - timedelta(days=366)
     # Keep provider requests comfortably below historical API date-range limits.
-    daily_ranges = list(date_chunks(daily_start, trade_end, 180))
+    daily_ranges = list(date_chunks(daily_start, trade_end, BACKTEST_DAILY_CHUNK_DAYS))
     intraday_ranges = list(date_chunks(trade_start, trade_end, BACKTEST_CHUNK_DAYS))
     total_calls = len(symbols) * (len(daily_ranges) + len(intraday_ranges))
     completed_calls = successful_calls = failed_calls = 0
