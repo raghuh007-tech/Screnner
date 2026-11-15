@@ -1886,6 +1886,20 @@ def _backtest_worker(symbols, trade_start, trade_end):
             )
         with history_db_lock:
             with _history_db_connect() as db:
+                # Reconcile the entire error ledger, not only the current date
+                # plan. Older runs may have left error rows for chunks that are
+                # already present in backtest_chunks but no longer fall inside
+                # the current collection window.
+                db.execute("""
+                    DELETE FROM backtest_errors
+                    WHERE EXISTS (
+                        SELECT 1 FROM backtest_chunks
+                        WHERE backtest_chunks.symbol = backtest_errors.symbol
+                          AND backtest_chunks.timeframe = backtest_errors.timeframe
+                          AND backtest_chunks.range_from = backtest_errors.range_from
+                          AND backtest_chunks.range_to = backtest_errors.range_to
+                    )
+                """)
                 remaining = db.execute("SELECT COUNT(*) FROM backtest_errors").fetchone()[0]
         final_status = 'partial' if remaining else 'data_ready'
         _backtest_update_state(
