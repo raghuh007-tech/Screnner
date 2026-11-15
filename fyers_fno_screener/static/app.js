@@ -306,9 +306,11 @@ $('exportSymbols').addEventListener('click', async () => {
     try { await navigator.serviceWorker.register('/static/sw.js'); } catch (_) {}
   }
   await updateStatus();
+  await refreshBacktestStatus();
   await refresh();
   refreshTimer = setInterval(refresh, 60000);
   setInterval(updateStatus, 30000);
+  setInterval(refreshBacktestStatus, 30000);
 })();
 
 let chartInstance=null, activeChartSymbol='', activeTimeframe='5'; // Default: today's 5-minute intraday chart
@@ -334,3 +336,47 @@ async function openChart(symbol){
   chartInstance.timeScale().fitContent();document.getElementById('chartMessage').textContent='Volume bars · EMA lines hidden';
  }catch(e){document.getElementById('chartMessage').textContent=e.message;}
 }
+
+
+async function refreshBacktestStatus() {
+  try {
+    const data = await api('/api/backtest/status');
+    const statusLabel = {
+      not_started:'Not started', running:'Collecting data',
+      partial:'Partial · retry needed', data_ready:'Historical data ready'
+    }[data.status] || data.status || 'Unknown';
+    $('btStatus').textContent = statusLabel;
+    $('btStocks').textContent = fmt(data.symbols_with_5m || 0,0);
+    $('btDailyStocks').textContent = fmt(data.symbols_with_daily || 0,0);
+    $('btBars').textContent = fmt(data.intraday_bars || 0,0);
+    $('btErrors').textContent = fmt(data.error_chunks || 0,0);
+    const pct = data.total_calls ? Math.min(100, data.completed_calls / data.total_calls * 100) : 0;
+    $('btProgressBar').style.width = pct + '%';
+    $('btProgressText').textContent = data.total_calls
+      ? fmt(data.completed_calls,0) + ' / ' + fmt(data.total_calls,0) + ' data requests · ' + fmt(pct,1) + '%'
+      : 'Historical collection has not started.';
+    $('btDateRange').textContent = data.trade_start && data.trade_end
+      ? data.trade_start + ' to ' + data.trade_end : '—';
+    $('btMessage').textContent = data.message || 'Waiting for status.';
+    $('startBacktest').disabled = Boolean(data.running);
+    $('startBacktest').textContent = data.running ? 'Collection Running…' : 'Start / Resume Data Collection';
+  } catch (error) {
+    $('btMessage').textContent = 'Backtest status unavailable: ' + error.message;
+  }
+}
+$('startBacktest').addEventListener('click', async () => {
+  const button = $('startBacktest');
+  button.disabled = true;
+  button.textContent = 'Starting…';
+  try {
+    const response = await fetch('/api/backtest/start', {method:'POST', credentials:'same-origin'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not start collection');
+    $('btMessage').textContent = data.message || 'Historical collection started.';
+    await refreshBacktestStatus();
+  } catch (error) {
+    $('btMessage').textContent = error.message;
+    button.disabled = false;
+    button.textContent = 'Start / Resume Data Collection';
+  }
+});
