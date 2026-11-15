@@ -1674,5 +1674,268 @@ def manifest():
     })
 
 
+# --------------------------- Backtesting V1 data layer ---------------------------
+# Kept separate from the live scanner's 45-day chart/volume cache.
+BACKTEST_DAYS = 183
+BACKTEST_CHUNK_DAYS = 30
+backtest_lock = threading.RLock()
+backtest_worker_running = False
+backtest_state = {
+    'status': 'not_started', 'message': 'Historical backfill has not been started.',
+    'completed_calls': 0, 'total_calls': 0, 'symbols_total': 0,
+    'symbols_done': 0, 'errors': 0, 'started_at': None, 'updated_at': None,
+    'trade_start': None, 'trade_end': None,
+}
+
+
+def init_backtest_store():
+    with history_db_lock:
+        with _history_db_connect() as db:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS backtest_candles (
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    session_date TEXT NOT NULL,
+                    candles_json TEXT NOT NULL,
+                    PRIMARY KEY(symbol, timeframe, session_date)
+                )
+            """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS backtest_chunks (
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    range_from TEXT NOT NULL,
+                    range_to TEXT NOT NULL,
+                    candle_count INTEGER NOT NULL DEFAULT 0,
+                    completed_at TEXT NOT NULL,
+                    PRIMARY KEY(symbol, timeframe, range_from, range_to)
+                )
+            """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS backtest_errors (
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    range_from TEXT NOT NULL,
+                    range_to TEXT NOT NULL,
+                    error TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(symbol, timeframe, range_from, range_to)
+                )
+            """)
+
+
+def _backtest_get_meta(db, key, default=None):
+    row = db.execute("SELECT meta_value FROM app_meta WHERE meta_key=?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def _backtest_set_meta(db, key, value):
+    db.execute(
+        "INSERT INTO app_meta(meta_key,meta_value) VALUES(?,?) "
+        "ON CONFLICT(meta_key) DO UPDATE SET meta_value=excluded.meta_value",
+        (key, str(value))
+    )
+
+
+def _backtest_chunk_done(db, symbol, timeframe, start_text, end_text):
+    return db.execute(
+        "SELECT 1 FROM backtest_chunks WHERE symbol=? AND timeframe=? AND range_from=? AND range_to=?",
+        (symbol, timeframe, start_text, end_text)
+    ).fetchone() is not None
+
+
+def _backtest_store_chunk(symbol, timeframe, start_text, end_text, candles):
+    sessions = {}
+    for candle in candles or []:
+        try:
+            if len(candle) < 6:
+                continue
+            session_date = datetime.fromtimestamp(int(candle[0]), IST).date().isoformat()
+            sessions.setdefault(session_date, []).append(candle)
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+    with history_db_lock:
+        with _history_db_connect() as db:
+            for session_date, rows in sessions.items():
+                rows.sort(key=lambda item: int(item[0]))
+                db.execute(
+                    "INSERT INTO backtest_candles(symbol,timeframe,session_date,candles_json) VALUES(?,?,?,?) "
+                    "ON CONFLICT(symbol,timeframe,session_date) DO UPDATE SET candles_json=excluded.candles_json",
+                    (symbol, timeframe, session_date, json.dumps(rows, separators=(',', ':')))
+                )
+            db.execute(
+                "INSERT INTO backtest_chunks(symbol,timeframe,range_from,range_to,candle_count,completed_at) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(symbol,timeframe,range_from,range_to) DO UPDATE SET "
+                "candle_count=excluded.candle_count,completed_at=excluded.completed_at",
+                (symbol, timeframe, start_text, end_text, sum(len(v) for v in sessions.values()), datetime.now(IST).isoformat())
+            )
+            db.execute(
+                "DELETE FROM backtest_errors WHERE symbol=? AND timeframe=? AND range_from=? AND range_to=?",
+                (symbol, timeframe, start_text, end_text)
+            )
+
+
+def _backtest_record_error(symbol, timeframe, start_text, end_text, error):
+    with history_db_lock:
+        with _history_db_connect() as db:
+            db.execute(
+                "INSERT INTO backtest_errors(symbol,timeframe,range_from,range_to,error,updated_at) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(symbol,timeframe,range_from,range_to) DO UPDATE SET "
+                "error=excluded.error,updated_at=excluded.updated_at",
+                (symbol, timeframe, start_text, end_text, str(error)[:500], datetime.now(IST).isoformat())
+            )
+
+
+def _backtest_update_state(**values):
+    with backtest_lock:
+        backtest_state.update(values)
+        backtest_state['updated_at'] = datetime.now(IST).isoformat(timespec='seconds')
+        snapshot = dict(backtest_state)
+    with history_db_lock:
+        with _history_db_connect() as db:
+            for key, value in snapshot.items():
+                _backtest_set_meta(db, 'backtest_' + key, json.dumps(value) if isinstance(value, (dict, list)) else value)
+
+
+def _backtest_worker(symbols, trade_start, trade_end):
+    global backtest_worker_running
+    daily_start = trade_start - timedelta(days=366)
+    intraday_ranges = list(date_chunks(trade_start, trade_end, BACKTEST_CHUNK_DAYS))
+    total_calls = len(symbols) * (1 + len(intraday_ranges))
+    completed_calls = 0
+    symbols_done = 0
+    errors = 0
+    _backtest_update_state(
+        status='running', message='Collecting one year of daily candles and six months of 5-minute candles.',
+        completed_calls=0, total_calls=total_calls, symbols_total=len(symbols),
+        symbols_done=0, errors=0, trade_start=trade_start.isoformat(),
+        trade_end=trade_end.isoformat(), started_at=datetime.now(IST).isoformat(timespec='seconds')
+    )
+    try:
+        for symbol in symbols:
+            # Daily history is needed to calculate PDH and rolling 52-week highs
+            # as they existed on each historical trade date (no look-ahead).
+            daily_from, daily_to = daily_start.isoformat(), trade_end.isoformat()
+            try:
+                with history_db_lock:
+                    with _history_db_connect() as db:
+                        daily_done = _backtest_chunk_done(db, symbol, 'D', daily_from, daily_to)
+                if not daily_done:
+                    daily_candles = fetch_history(symbol, 'D', daily_from, daily_to)
+                    _backtest_store_chunk(symbol, 'D', daily_from, daily_to, daily_candles)
+                completed_calls += 1
+            except Exception as exc:
+                errors += 1
+                _backtest_record_error(symbol, 'D', daily_from, daily_to, exc)
+                completed_calls += 1
+
+            for chunk_start, chunk_end in intraday_ranges:
+                start_text, end_text = chunk_start.isoformat(), chunk_end.isoformat()
+                try:
+                    with history_db_lock:
+                        with _history_db_connect() as db:
+                            done = _backtest_chunk_done(db, symbol, '5', start_text, end_text)
+                    if not done:
+                        candles = fetch_history(symbol, '5', start_text, end_text)
+                        _backtest_store_chunk(symbol, '5', start_text, end_text, candles)
+                    completed_calls += 1
+                except Exception as exc:
+                    errors += 1
+                    _backtest_record_error(symbol, '5', start_text, end_text, exc)
+                    completed_calls += 1
+
+                _backtest_update_state(
+                    completed_calls=completed_calls, symbols_done=symbols_done,
+                    errors=errors, message=f'Historical data: {symbol} · {completed_calls}/{total_calls} requests checked.'
+                )
+            symbols_done += 1
+            _backtest_update_state(
+                completed_calls=completed_calls, symbols_done=symbols_done,
+                errors=errors, message=f'Historical data collected for {symbols_done}/{len(symbols)} stocks.'
+            )
+        with history_db_lock:
+            with _history_db_connect() as db:
+                remaining = db.execute("SELECT COUNT(*) FROM backtest_errors").fetchone()[0]
+        final_status = 'partial' if remaining else 'data_ready'
+        _backtest_update_state(
+            status=final_status,
+            message=('Collection finished with errors. Failed chunks can be resumed.' if remaining
+                     else 'Historical data collection complete. Strategy validation is the next step.'),
+            completed_calls=completed_calls, total_calls=total_calls,
+            symbols_done=symbols_done, errors=remaining
+        )
+    finally:
+        with backtest_lock:
+            backtest_worker_running = False
+
+
+def _backtest_status_payload():
+    with history_db_lock:
+        with _history_db_connect() as db:
+            symbol_count = db.execute("SELECT COUNT(DISTINCT symbol) FROM backtest_candles WHERE timeframe='5'").fetchone()[0]
+            daily_symbols = db.execute("SELECT COUNT(DISTINCT symbol) FROM backtest_candles WHERE timeframe='D'").fetchone()[0]
+            intraday_days = db.execute("SELECT COUNT(*) FROM backtest_candles WHERE timeframe='5'").fetchone()[0]
+            intraday_bars = db.execute(
+                "SELECT COALESCE(SUM(json_array_length(candles_json)),0) FROM backtest_candles WHERE timeframe='5'"
+            ).fetchone()[0]
+            error_count = db.execute("SELECT COUNT(*) FROM backtest_errors").fetchone()[0]
+    with backtest_lock:
+        state = dict(backtest_state)
+        state['running'] = backtest_worker_running
+    state.update({
+        'symbols_with_5m': symbol_count, 'symbols_with_daily': daily_symbols,
+        'intraday_session_rows': intraday_days, 'intraday_bars': intraday_bars,
+        'error_chunks': error_count, 'storage_path': HISTORY_DB_PATH,
+    })
+    return state
+
+
+init_backtest_store()
+
+
+@app.route('/api/backtest/status')
+def backtest_status():
+    return jsonify(_backtest_status_payload())
+
+
+@app.route('/api/backtest/start', methods=['POST'])
+def backtest_start():
+    global backtest_worker_running
+    if not TOKEN:
+        return jsonify({'error': f'Connect {BROKER_PROVIDER.upper()} before starting historical collection.'}), 400
+    try:
+        if not cache['symbols']:
+            cache['symbols'] = get_symbol_universe()
+        symbols = list(cache['symbols'])
+        if not symbols:
+            return jsonify({'error': 'The F&O stock universe is empty.'}), 503
+        with backtest_lock:
+            if backtest_worker_running:
+                return jsonify({'ok': True, 'message': 'Historical collection is already running.'})
+            backtest_worker_running = True
+        today = datetime.now(IST).date()
+        trade_end = today - timedelta(days=1)
+        trade_start = trade_end - timedelta(days=BACKTEST_DAYS - 1)
+        worker = threading.Thread(
+            target=_backtest_worker, args=(symbols, trade_start, trade_end),
+            name='backtest-history-worker', daemon=True
+        )
+        try:
+            worker.start()
+        except Exception:
+            with backtest_lock:
+                backtest_worker_running = False
+            raise
+        return jsonify({
+            'ok': True, 'message': 'Historical collection started. It runs in the background and can resume completed chunks after interruption.',
+            'symbols': len(symbols), 'trade_start': trade_start.isoformat(),
+            'trade_end': trade_end.isoformat()
+        })
+    except Exception as exc:
+        app.logger.exception('Could not start backtest history collection: %s', exc)
+        return jsonify({'error': 'Could not start historical collection. Check the server log.'}), 500
+
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', '8000')), debug=False)
