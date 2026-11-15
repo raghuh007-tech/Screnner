@@ -432,3 +432,22 @@ tbody tr:hover{background:#18283a}
   .stock-row .trade-plan span{font-size:6.5px}
   .stock-row-name{font-size:9px}
 }
+
+
+.backtest-panel{margin:16px 0}
+.backtest-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:14px 0}
+.backtest-grid>div{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px;min-width:0}
+.backtest-grid span{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}
+.backtest-grid strong{font-size:17px;overflow-wrap:anywhere}
+.backtest-progress{height:8px;background:#26374d;border-radius:20px;overflow:hidden}
+.backtest-progress>div{height:100%;width:0;background:var(--green);transition:width .25s ease}
+.backtest-foot{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:11px;margin-top:7px}
+.backtest-message{color:var(--muted);font-size:12px;margin:12px 0 2px}
+@media(max-width:760px){
+ .backtest-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+ .backtest-grid>div:last-child{grid-column:span 2}
+ .backtest-grid strong{font-size:15px}
+ .backtest-panel .panel-head{align-items:flex-start;flex-direction:column}
+ .backtest-foot{flex-direction:column;gap:4px}
+ .backtest-panel button{width:100%}
+}
