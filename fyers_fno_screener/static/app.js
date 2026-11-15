@@ -349,11 +349,13 @@ async function refreshBacktestStatus() {
     $('btStocks').textContent = fmt(data.symbols_with_5m || 0,0);
     $('btDailyStocks').textContent = fmt(data.symbols_with_daily || 0,0);
     $('btBars').textContent = fmt(data.intraday_bars || 0,0);
-    $('btErrors').textContent = fmt(data.error_chunks || 0,0);
+    $('btErrors').textContent = fmt(data.error_chunks ?? data.failed_calls ?? 0,0);
     const pct = data.total_calls ? Math.min(100, data.completed_calls / data.total_calls * 100) : 0;
     $('btProgressBar').style.width = pct + '%';
     $('btProgressText').textContent = data.total_calls
-      ? fmt(data.completed_calls,0) + ' / ' + fmt(data.total_calls,0) + ' data requests · ' + fmt(pct,1) + '%'
+      ? fmt(data.completed_calls,0) + ' / ' + fmt(data.total_calls,0) + ' checked · ' +
+        fmt(data.successful_calls || 0,0) + ' successful · ' + fmt(data.failed_calls || 0,0) +
+        ' failed · ' + fmt(pct,1) + '%'
       : 'Historical collection has not started.';
     $('btDateRange').textContent = data.trade_start && data.trade_end
       ? data.trade_start + ' to ' + data.trade_end : '—';
