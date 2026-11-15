@@ -12,7 +12,7 @@ from typing import Iterable
 
 IST = ZoneInfo("Asia/Kolkata")
 ENTRY_CANDLE_TIME = time(9, 15)  # first 5-minute candle, 09:15–09:20
-FORCE_EXIT_TIME = time(15, 0)
+FORCE_EXIT_TIME = time(15, 30)  # use the final 15:25 candle close for an end-of-day exit
 CAPITAL_PER_TRADE = 250_000.0
 
 
@@ -51,15 +51,14 @@ def _valid_candle(c):
 
 def simulate_intraday_trade(symbol: str, trade_date: str, candles: Iterable,
                             capital: float = CAPITAL_PER_TRADE) -> TradeResult:
-    """Simulate first breakout above 09:15 candle high; SL at its low; exit 15:00.
+    """Enter on the first break of the 09:15–09:20 candle high; stop at its low.
 
     Candles are [epoch, open, high, low, close, volume], sorted or unsorted.
-    Entry is only considered after the 09:15 candle has fully closed.
+    Entry is only considered from 09:20 onward, after the first candle closes.
     For a 5-minute candle crossing both entry and stop, sequence is unknowable;
     return AMBIGUOUS rather than assume a favourable path.
     A stop gap is filled at candle open; a breakout gap is filled at candle open.
-    The 15:00 exit uses the open of the 15:00 candle (the first available
-    5-minute observation at the requested exit time).
+    Open positions exit at the close of the final available 15:25 candle.
     """
     day = []
     for c in candles or []:
@@ -150,20 +149,27 @@ def simulate_intraday_trade(symbol: str, trade_date: str, candles: Iterable,
     )
 
 
-def qualifies_for_strategy(price: float, week52_high: float, ltp: float,
-                           pdh: float, volume_ratio: float) -> tuple[bool, dict]:
-    """Evaluate 52W proximity, PDH breakout and 3x relative-volume filters."""
+def qualifies_for_strategy(price: float, week52_high: float | None, ltp: float,
+                           pdh: float, volume_ratio: float,
+                           daily_change_pct: float | None = None) -> tuple[bool, dict]:
+    """Core setup is PDH +2% daily momentum + 3x volume; 52W proximity is informational."""
     try:
-        gap_pct = max(0.0, (float(week52_high) - float(price)) / float(week52_high) * 100)
+        gap_pct = (
+            max(0.0, (float(week52_high) - float(price)) / float(week52_high) * 100)
+            if week52_high is not None and float(week52_high) > 0 else None
+        )
         checks = {
-            "within_5pct_52w_high": gap_pct <= 5.0,
             "pdh_breakout": float(ltp) > float(pdh),
+            "daily_change_2pct": daily_change_pct is not None and float(daily_change_pct) >= 2.0,
             "volume_3x": float(volume_ratio) >= 3.0,
+            "within_5pct_52w_high": gap_pct is not None and gap_pct <= 5.0,
         }
-        return all(checks.values()), {**checks, "week52_gap_pct": gap_pct}
+        core_qualifies = checks["pdh_breakout"] and checks["daily_change_2pct"] and checks["volume_3x"]
+        return core_qualifies, {**checks, "week52_gap_pct": gap_pct}
     except (TypeError, ValueError, ZeroDivisionError):
-        return False, {"within_5pct_52w_high": False, "pdh_breakout": False,
-                       "volume_3x": False, "week52_gap_pct": None}
+        return False, {"pdh_breakout": False, "daily_change_2pct": False,
+                       "volume_3x": False, "within_5pct_52w_high": False,
+                       "week52_gap_pct": None}
 
 
 
