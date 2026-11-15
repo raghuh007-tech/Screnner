@@ -115,7 +115,7 @@ def simulate_intraday_trade(symbol: str, trade_date: str, candles: Iterable,
         if dt.time() >= FORCE_EXIT_TIME:
             exit_price = float(c[1]) if dt.time() == FORCE_EXIT_TIME else float(c[4])
             exit_dt = dt
-            reason = "TIME_EXIT_15:00" if dt.time() == FORCE_EXIT_TIME else "LAST_AVAILABLE_AFTER_15:00"
+            reason = "END_OF_DAY_CLOSE" if dt.time() >= FORCE_EXIT_TIME else "LAST_AVAILABLE_AFTER_15:30"
             break
         o, h, l = float(c[1]), float(c[2]), float(c[3])
         # Entry candle itself is checked after the entry event; high/low order is
