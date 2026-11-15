@@ -101,6 +101,22 @@
     <div id="mobileRows" class="mobile-rows"><div class="empty">Connect {{ broker_name }} to start the scan.</div></div>
     <div class="footnote" id="coverage-note">Waiting for market data.</div>
   </section>
+  <section class="panel backtest-panel" id="backtestPanel">
+    <div class="panel-head">
+      <div><h2>Backtesting V1</h2><p>Separate historical research · 218 F&O cash stocks · 6-month test window</p></div>
+      <button id="startBacktest" class="connect" type="button">Start / Resume Data Collection</button>
+    </div>
+    <div class="backtest-grid">
+      <div><span>Collection status</span><strong id="btStatus">Not started</strong></div>
+      <div><span>5-minute stocks</span><strong id="btStocks">0</strong></div>
+      <div><span>Daily stocks</span><strong id="btDailyStocks">0</strong></div>
+      <div><span>5-minute bars</span><strong id="btBars">0</strong></div>
+      <div><span>Failed chunks</span><strong id="btErrors">0</strong></div>
+    </div>
+    <div class="backtest-progress"><div id="btProgressBar"></div></div>
+    <div class="backtest-foot"><span id="btProgressText">Historical collection has not started.</span><span id="btDateRange">—</span></div>
+    <p id="btMessage" class="backtest-message">No historical data has been collected for backtesting yet. Starting this job will not change the live scanner.</p>
+  </section>
   <section class="history-status">
     <span class="pulse"></span><span id="historyText">Historical baselines not loaded yet.</span>
     <span id="historyStorageText" class="storage-note">Checking history storage…</span>
@@ -115,6 +131,6 @@
 <div class="chart-timeframes"><button data-tf="1" type="button">1m</button><button class="active" data-tf="5" type="button">5m</button><button data-tf="15" type="button">15m</button><button data-tf="60" type="button">1h</button></div>
 <div id="stockChart" class="stock-chart"></div><div id="chartMessage" class="chart-message">Loading candles and volume…</div>
 </section></div>
-<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=15"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=16"></script>
 </body>
 </html>
