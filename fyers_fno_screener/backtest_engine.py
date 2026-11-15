@@ -164,3 +164,55 @@ def qualifies_for_strategy(price: float, week52_high: float, ltp: float,
     except (TypeError, ValueError, ZeroDivisionError):
         return False, {"within_5pct_52w_high": False, "pdh_breakout": False,
                        "volume_3x": False, "week52_gap_pct": None}
+
+
+
+def summarize_trades(trades: Iterable[TradeResult], cost_per_trade: float = 0.0) -> dict:
+    """Summarize closed trades. Cost is a configurable round-trip INR estimate.
+
+    Use zero until the app supplies a verified, date-appropriate Indian cash
+    brokerage/tax schedule. This avoids presenting guessed charges as fact.
+    """
+    rows = [t for t in trades if t.status == "CLOSED"]
+    if not rows:
+        return {
+            "closed_trades": 0, "gross_pnl": 0.0, "estimated_costs": 0.0,
+            "net_pnl": 0.0, "wins": 0, "losses": 0, "win_rate_pct": None,
+            "profit_factor": None, "average_r": None, "max_drawdown": 0.0,
+            "monthly": {}, "status_counts": _status_counts(trades),
+        }
+    wins = [t for t in rows if t.gross_pnl > 0]
+    losses = [t for t in rows if t.gross_pnl < 0]
+    gross = sum(t.gross_pnl for t in rows)
+    costs = len(rows) * max(0.0, float(cost_per_trade))
+    net_values = [t.gross_pnl - max(0.0, float(cost_per_trade)) for t in rows]
+    equity = peak = drawdown = 0.0
+    for value in net_values:
+        equity += value
+        peak = max(peak, equity)
+        drawdown = max(drawdown, peak - equity)
+    gross_profit = sum(t.gross_pnl for t in wins)
+    gross_loss = abs(sum(t.gross_pnl for t in losses))
+    monthly = {}
+    for t in rows:
+        key = t.trade_date[:7]
+        monthly[key] = monthly.get(key, 0.0) + t.gross_pnl - max(0.0, float(cost_per_trade))
+    r_values = [t.risk_reward_realized for t in rows if t.risk_reward_realized is not None]
+    return {
+        "closed_trades": len(rows), "gross_pnl": round(gross, 2),
+        "estimated_costs": round(costs, 2), "net_pnl": round(gross - costs, 2),
+        "wins": len(wins), "losses": len(losses),
+        "win_rate_pct": round(len(wins) / len(rows) * 100, 2),
+        "profit_factor": round(gross_profit / gross_loss, 3) if gross_loss else None,
+        "average_r": round(sum(r_values) / len(r_values), 3) if r_values else None,
+        "max_drawdown": round(drawdown, 2),
+        "monthly": {k: round(v, 2) for k, v in sorted(monthly.items())},
+        "status_counts": _status_counts(trades),
+    }
+
+
+def _status_counts(trades):
+    counts = {}
+    for trade in trades:
+        counts[trade.status] = counts.get(trade.status, 0) + 1
+    return counts
