@@ -1678,6 +1678,7 @@ def manifest():
 # Kept separate from the live scanner's 45-day chart/volume cache.
 BACKTEST_DAYS = 183
 BACKTEST_CHUNK_DAYS = 30
+BACKTEST_DAILY_CHUNK_DAYS = 180
 backtest_lock = threading.RLock()
 backtest_worker_running = False
 backtest_state = {
@@ -1800,58 +1801,63 @@ def _backtest_update_state(**values):
 def _backtest_worker(symbols, trade_start, trade_end):
     global backtest_worker_running
     daily_start = trade_start - timedelta(days=366)
+    # Keep provider requests comfortably below historical API date-range limits.
+    daily_ranges = list(date_chunks(daily_start, trade_end, 180))
     intraday_ranges = list(date_chunks(trade_start, trade_end, BACKTEST_CHUNK_DAYS))
-    total_calls = len(symbols) * (1 + len(intraday_ranges))
-    completed_calls = 0
+    total_calls = len(symbols) * (len(daily_ranges) + len(intraday_ranges))
+    completed_calls = successful_calls = failed_calls = 0
     symbols_done = 0
-    errors = 0
     _backtest_update_state(
-        status='running', message='Collecting one year of daily candles and six months of 5-minute candles.',
-        completed_calls=0, total_calls=total_calls, symbols_total=len(symbols),
-        symbols_done=0, errors=0, trade_start=trade_start.isoformat(),
-        trade_end=trade_end.isoformat(), started_at=datetime.now(IST).isoformat(timespec='seconds')
+        status='running',
+        message='Collecting 18 months of daily candles and six months of 5-minute candles in resumable batches.',
+        completed_calls=0, successful_calls=0, failed_calls=0,
+        total_calls=total_calls, symbols_total=len(symbols), symbols_done=0,
+        errors=0, active_symbol=None, active_timeframe=None,
+        trade_start=trade_start.isoformat(), trade_end=trade_end.isoformat(),
+        started_at=datetime.now(IST).isoformat(timespec='seconds')
     )
     try:
         for symbol in symbols:
-            # Daily history is needed to calculate PDH and rolling 52-week highs
-            # as they existed on each historical trade date (no look-ahead).
-            daily_from, daily_to = daily_start.isoformat(), trade_end.isoformat()
-            try:
-                with history_db_lock:
-                    with _history_db_connect() as db:
-                        daily_done = _backtest_chunk_done(db, symbol, 'D', daily_from, daily_to)
-                if not daily_done:
-                    daily_candles = fetch_history(symbol, 'D', daily_from, daily_to)
-                    _backtest_store_chunk(symbol, 'D', daily_from, daily_to, daily_candles)
-                completed_calls += 1
-            except Exception as exc:
-                errors += 1
-                _backtest_record_error(symbol, 'D', daily_from, daily_to, exc)
-                completed_calls += 1
-
-            for chunk_start, chunk_end in intraday_ranges:
-                start_text, end_text = chunk_start.isoformat(), chunk_end.isoformat()
-                try:
+            for timeframe, ranges in (('D', daily_ranges), ('5', intraday_ranges)):
+                for chunk_start, chunk_end in ranges:
+                    start_text, end_text = chunk_start.isoformat(), chunk_end.isoformat()
+                    try:
+                        with history_db_lock:
+                            with _history_db_connect() as db:
+                                done = _backtest_chunk_done(db, symbol, timeframe, start_text, end_text)
+                        if not done:
+                            candles = fetch_history(symbol, timeframe, start_text, end_text)
+                            # A successful empty response is stored as a completed zero-bar
+                            # chunk; provider/network exceptions remain retryable errors.
+                            _backtest_store_chunk(symbol, timeframe, start_text, end_text, candles)
+                        successful_calls += 1
+                    except Exception as exc:
+                        failed_calls += 1
+                        _backtest_record_error(symbol, timeframe, start_text, end_text, exc)
+                        app.logger.warning(
+                            'Backtest history chunk failed for %s %s %s to %s: %s',
+                            symbol, timeframe, start_text, end_text, exc
+                        )
+                    completed_calls += 1
                     with history_db_lock:
                         with _history_db_connect() as db:
-                            done = _backtest_chunk_done(db, symbol, '5', start_text, end_text)
-                    if not done:
-                        candles = fetch_history(symbol, '5', start_text, end_text)
-                        _backtest_store_chunk(symbol, '5', start_text, end_text, candles)
-                    completed_calls += 1
-                except Exception as exc:
-                    errors += 1
-                    _backtest_record_error(symbol, '5', start_text, end_text, exc)
-                    completed_calls += 1
-
-                _backtest_update_state(
-                    completed_calls=completed_calls, symbols_done=symbols_done,
-                    errors=errors, message=f'Historical data: {symbol} · {completed_calls}/{total_calls} requests checked.'
-                )
+                            remaining_errors = db.execute(
+                                "SELECT COUNT(*) FROM backtest_errors"
+                            ).fetchone()[0]
+                    _backtest_update_state(
+                        completed_calls=completed_calls,
+                        successful_calls=successful_calls,
+                        failed_calls=failed_calls,
+                        symbols_done=symbols_done,
+                        errors=remaining_errors,
+                        active_symbol=symbol,
+                        active_timeframe=timeframe,
+                        message=f'Checked {symbol} · {timeframe}-minute history · {completed_calls}/{total_calls} batches.'
+                    )
             symbols_done += 1
             _backtest_update_state(
-                completed_calls=completed_calls, symbols_done=symbols_done,
-                errors=errors, message=f'Historical data collected for {symbols_done}/{len(symbols)} stocks.'
+                symbols_done=symbols_done,
+                message=f'Historical data checked for {symbols_done}/{len(symbols)} stocks.'
             )
         with history_db_lock:
             with _history_db_connect() as db:
@@ -1859,14 +1865,50 @@ def _backtest_worker(symbols, trade_start, trade_end):
         final_status = 'partial' if remaining else 'data_ready'
         _backtest_update_state(
             status=final_status,
-            message=('Collection finished with errors. Failed chunks can be resumed.' if remaining
-                     else 'Historical data collection complete. Strategy validation is the next step.'),
-            completed_calls=completed_calls, total_calls=total_calls,
-            symbols_done=symbols_done, errors=remaining
+            message=('Collection finished with errors. Select Start / Resume to retry failed batches.'
+                     if remaining else
+                     'Historical data collection complete. Strategy validation can now proceed.'),
+            completed_calls=completed_calls, successful_calls=successful_calls,
+            failed_calls=failed_calls, total_calls=total_calls,
+            symbols_done=symbols_done, errors=remaining,
+            active_symbol=None, active_timeframe=None
         )
+    except Exception as exc:
+        app.logger.exception('Backtest history worker stopped unexpectedly: %s', exc)
+        _backtest_update_state(
+            status='partial', message='Collection stopped unexpectedly. Completed batches are saved; resume to continue.',
+            completed_calls=completed_calls, successful_calls=successful_calls,
+            failed_calls=failed_calls, total_calls=total_calls,
+            symbols_done=symbols_done, active_symbol=None, active_timeframe=None
+        )
+        raise
     finally:
         with backtest_lock:
             backtest_worker_running = False
+
+
+def _backtest_restore_state():
+    """Restore progress metadata after a Render restart; candle chunks remain authoritative."""
+    with history_db_lock:
+        with _history_db_connect() as db:
+            rows = db.execute(
+                "SELECT meta_key, meta_value FROM app_meta WHERE meta_key LIKE 'backtest_%'"
+            ).fetchall()
+    restored = {}
+    for key, value in rows:
+        name = key[len('backtest_'):]
+        try:
+            restored[name] = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            restored[name] = value
+    with backtest_lock:
+        backtest_state.update(restored)
+        if backtest_state.get('status') == 'running':
+            backtest_state.update({
+                'status': 'partial',
+                'message': 'Previous collection was interrupted by a restart. Saved batches are retained; resume to continue.'
+            })
+
 
 
 def _backtest_status_payload():
@@ -1891,6 +1933,7 @@ def _backtest_status_payload():
 
 
 init_backtest_store()
+_backtest_restore_state()
 
 
 @app.route('/api/backtest/status')
