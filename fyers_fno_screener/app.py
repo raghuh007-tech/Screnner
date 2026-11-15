@@ -1980,6 +1980,74 @@ def backtest_status():
     return jsonify(_backtest_status_payload())
 
 
+@app.route('/api/backtest/diagnostics')
+def backtest_diagnostics():
+    """Read-only inspection of failed history chunks; protected by private login."""
+    today = datetime.now(IST).date()
+    trade_end = today - timedelta(days=1)
+    trade_start = trade_end - timedelta(days=BACKTEST_DAYS - 1)
+    daily_start = trade_start - timedelta(days=366)
+    intraday_start_text = trade_start.isoformat()
+    intraday_end_text = trade_end.isoformat()
+    daily_start_text = daily_start.isoformat()
+    daily_end_text = trade_end.isoformat()
+    with history_db_lock:
+        with _history_db_connect() as db:
+            total = db.execute("SELECT COUNT(*) FROM backtest_errors").fetchone()[0]
+            matched = db.execute("""
+                SELECT COUNT(*) FROM backtest_errors e
+                WHERE EXISTS (
+                    SELECT 1 FROM backtest_chunks c
+                    WHERE c.symbol=e.symbol AND c.timeframe=e.timeframe
+                      AND c.range_from=e.range_from AND c.range_to=e.range_to
+                )
+            """).fetchone()[0]
+            outside = db.execute("""
+                SELECT COUNT(*) FROM backtest_errors
+                WHERE NOT (
+                    (timeframe='5' AND range_from >= ? AND range_to <= ?)
+                    OR (timeframe='D' AND range_from >= ? AND range_to <= ?)
+                )
+            """, (intraday_start_text, intraday_end_text, daily_start_text, daily_end_text)).fetchone()[0]
+            groups = db.execute("""
+                SELECT timeframe, error, COUNT(*) AS count
+                FROM backtest_errors
+                GROUP BY timeframe, error
+                ORDER BY count DESC, timeframe, error
+                LIMIT 100
+            """).fetchall()
+            rows = db.execute("""
+                SELECT e.symbol, e.timeframe, e.range_from, e.range_to, e.error,
+                       e.updated_at,
+                       CASE WHEN c.symbol IS NULL THEN 0 ELSE 1 END AS chunk_saved,
+                       COALESCE(c.candle_count, 0) AS candle_count
+                FROM backtest_errors e
+                LEFT JOIN backtest_chunks c
+                  ON c.symbol=e.symbol AND c.timeframe=e.timeframe
+                 AND c.range_from=e.range_from AND c.range_to=e.range_to
+                ORDER BY e.timeframe, e.range_from, e.symbol
+                LIMIT 300
+            """).fetchall()
+    return jsonify({
+        'read_only': True,
+        'error_count': total,
+        'errors_with_matching_completed_chunk': matched,
+        'errors_outside_current_collection_window': outside,
+        'current_window': {
+            'intraday_5m': {'from': intraday_start_text, 'to': intraday_end_text},
+            'daily': {'from': daily_start_text, 'to': daily_end_text},
+        },
+        'error_groups': [
+            {'timeframe': r[0], 'error': r[1], 'count': r[2]} for r in groups
+        ],
+        'failed_chunks': [
+            {'symbol': r[0], 'timeframe': r[1], 'from': r[2], 'to': r[3],
+             'error': r[4], 'updated_at': r[5], 'matching_chunk_saved': bool(r[6]),
+             'stored_candle_count': r[7]} for r in rows
+        ],
+    })
+
+
 @app.route('/api/backtest/start', methods=['POST'])
 def backtest_start():
     global backtest_worker_running
