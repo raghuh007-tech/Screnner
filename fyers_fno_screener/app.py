@@ -1845,6 +1845,16 @@ def _backtest_worker(symbols, trade_start, trade_end):
                             # A successful empty response is stored as a completed zero-bar
                             # chunk; provider/network exceptions remain retryable errors.
                             _backtest_store_chunk(symbol, timeframe, start_text, end_text, candles)
+                        else:
+                            # A completed chunk is authoritative. Clear any stale error
+                            # left behind by an earlier attempt so retries can reconcile
+                            # the error ledger even when no provider request is needed.
+                            with history_db_lock:
+                                with _history_db_connect() as db:
+                                    db.execute(
+                                        "DELETE FROM backtest_errors WHERE symbol=? AND timeframe=? AND range_from=? AND range_to=?",
+                                        (symbol, timeframe, start_text, end_text)
+                                    )
                         successful_calls += 1
                     except Exception as exc:
                         failed_calls += 1
