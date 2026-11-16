@@ -2524,5 +2524,145 @@ def backtest_strategy_run():
     return jsonify({'ok':True,'message':'Strategy validation started.'})
 
 
+# --------------------------- IVF Strategy validation V2 ---------------------------
+strategy_v2_lock = threading.RLock()
+strategy_v2_worker_running = False
+strategy_v2_state = {'status':'not_run','message':'IVF Version 2 has not been run.','trade_count':0,'trades':[],'summary':{}}
+
+
+def _strategy_v2_compute():
+    global strategy_v2_worker_running
+    with strategy_v2_lock:
+        strategy_v2_state.update({'status':'calculating','message':'Calculating IVF V2 on stored 5-minute candles.'})
+    try:
+        with history_db_lock:
+            with _history_db_connect() as db:
+                symbols=[r[0] for r in db.execute("SELECT DISTINCT symbol FROM backtest_candles WHERE timeframe='5' ORDER BY symbol").fetchall()]
+                data={}
+                for symbol in symbols:
+                    ir=db.execute("SELECT session_date,candles_json FROM backtest_candles WHERE symbol=? AND timeframe='5' ORDER BY session_date",(symbol,)).fetchall()
+                    dr=db.execute("SELECT session_date,candles_json FROM backtest_candles WHERE symbol=? AND timeframe='D' ORDER BY session_date",(symbol,)).fetchall()
+                    data[symbol]=(ir,dr)
+        trades=[]
+        excluded={'missing_0920_or_0925':0,'insufficient_20_slot_history':0,'pdh_not_broken':0,'no_0925_breakout':0,'invalid_or_over_2pct_stop':0}
+        for symbol,(intraday_rows,daily_rows) in data.items():
+            daily={}
+            for d,raw in daily_rows:
+                try:
+                    x=json.loads(raw)
+                    if x: daily[d]=x[-1]
+                except (TypeError,ValueError,json.JSONDecodeError): pass
+            dates=sorted(daily)
+            pdh={dates[i]:float(daily[dates[i-1]][2]) for i in range(1,len(dates))}
+            sessions={}
+            for d,raw in intraday_rows:
+                try:
+                    cs=sorted([c for c in json.loads(raw) if isinstance(c,list) and len(c)>=6],key=lambda c:int(c[0]))
+                    if cs: sessions[d]=cs
+                except (TypeError,ValueError,json.JSONDecodeError): pass
+            session_dates=sorted(sessions)
+            for di,d in enumerate(session_dates):
+                if d not in pdh: continue
+                by_time={}
+                for c in sessions[d]:
+                    t=_bt_candle_time(c)
+                    by_time[(t.hour,t.minute)]=c
+                c920=by_time.get((9,20)); c925=by_time.get((9,25))
+                if c920 is None or c925 is None:
+                    excluded['missing_0920_or_0925']+=1; continue
+                trigger=float(c920[2])
+                if float(c925[2])<=trigger:
+                    excluded['no_0925_breakout']+=1; continue
+                # Compare the 09:25 candle volume with the same slot in each of 20 prior sessions.
+                prior=[]
+                for old_date in session_dates[max(0,di-20):di]:
+                    old=next((c for c in sessions[old_date] if (_bt_candle_time(c).hour,_bt_candle_time(c).minute)==(9,25)),None)
+                    if old is not None: prior.append(float(old[5]))
+                if len(prior)<20:
+                    excluded['insufficient_20_slot_history']+=1; continue
+                avg=sum(prior)/20.0
+                if avg<=0 or float(c925[5]) < 3.0*avg: continue
+                # Avoid assuming a fill below an opening gap.
+                entry=max(trigger,float(c925[1]))
+                if entry<=pdh[d]:
+                    excluded['pdh_not_broken']+=1; continue
+                stop=float(c925[3])
+                risk=(entry-stop)/entry if entry>0 else 99
+                if risk<=0 or risk>0.02:
+                    excluded['invalid_or_over_2pct_stop']+=1; continue
+                qty=int(250000.0//entry)
+                if qty<=0: continue
+                exit_price=None; exit_time=None; reason='3:00 PM'
+                # The 09:25 low defines the stop. Start monitoring from the next candle:
+                # 5-minute OHLCV cannot establish whether that low preceded the breakout.
+                for c in sessions[d]:
+                    t=_bt_candle_time(c)
+                    if t<=_bt_candle_time(c925): continue
+                    if (t.hour,t.minute)>=(15,0): break
+                    if float(c[3])<=stop:
+                        exit_price=stop; exit_time=t; reason='Stop loss'; break
+                if exit_price is None:
+                    eligible=[c for c in sessions[d] if (_bt_candle_time(c).hour,_bt_candle_time(c).minute)<=(15,0)]
+                    if not eligible: continue
+                    last=eligible[-1]; exit_price=float(last[4]); exit_time=_bt_candle_time(last)
+                gross=(exit_price-entry)*qty
+                trades.append({'date':d,'symbol':symbol.split(':')[-1].replace('-EQ',''),
+                    'entry_time':'09:25','entry':round(entry,2),'stop':round(stop,2),
+                    'stop_pct':round(risk*100,2),'exit_time':exit_time.strftime('%H:%M'),
+                    'exit':round(exit_price,2),'qty':qty,'exit_reason':reason,
+                    'gross_pnl':round(gross,2),'brokerage':137.0,'net_pnl':round(gross-137.0,2),
+                    'ivf_multiple':round(float(c925[5])/avg,2),'pdh':round(pdh[d],2)})
+        trades.sort(key=lambda x:(x['date'],x['entry_time'],x['symbol']))
+        wins=[t for t in trades if t['net_pnl']>0]; losses=[t for t in trades if t['net_pnl']<=0]
+        gross=sum(t['gross_pnl'] for t in trades); net=sum(t['net_pnl'] for t in trades)
+        gp=sum(t['gross_pnl'] for t in trades if t['gross_pnl']>0)
+        gl=abs(sum(t['gross_pnl'] for t in trades if t['gross_pnl']<0))
+        equity=peak=dd=0.0
+        for t in trades:
+            equity+=t['net_pnl']; peak=max(peak,equity); dd=max(dd,peak-equity)
+        summary={'total_trades':len(trades),'winning_trades':len(wins),'losing_trades':len(losses),
+            'win_rate_pct':round(len(wins)/len(trades)*100,2) if trades else 0,
+            'gross_pnl':round(gross,2),'brokerage_total':round(len(trades)*137.0,2),
+            'net_pnl':round(net,2),'profit_factor':round(gp/gl,2) if gl else None,
+            'max_drawdown':round(dd,2),'avg_net_per_trade':round(net/len(trades),2) if trades else 0,
+            'capital_per_trade':250000,'brokerage_per_trade':137,'excluded_days':excluded,
+            'data_note':'IVF = 09:25 candle volume / average 09:25 candle volume over prior 20 sessions; ≥3×. PDH mandatory. Entry trigger is 09:20 high when 09:25 candle breaks it; fill is max(trigger, 09:25 open). Stop is 09:25 low; stop checks begin on the next 5-minute candle because intrabar order is unknown. Trades with stop distance >2% or invalid stop are skipped. Exit at stop or last close at/before 15:00. One trade per stock/day. ₹2,50,000 notional; flat ₹137 brokerage. Other charges and slippage excluded.'}
+        with strategy_v2_lock:
+            strategy_v2_state.update({'status':'complete','message':'IVF Version 2 backtest complete.','trade_count':len(trades),'trades':trades,'summary':summary,'updated_at':datetime.now(IST).isoformat()})
+    except Exception as exc:
+        app.logger.exception('IVF V2 failed: %s',exc)
+        with strategy_v2_lock: strategy_v2_state.update({'status':'error','message':'IVF V2 failed. Check server logs.','error':str(exc)})
+    finally:
+        with strategy_v2_lock: strategy_v2_worker_running=False
+
+
+@app.route('/api/backtest/strategy/v2/status')
+def backtest_strategy_v2_status():
+    with strategy_v2_lock: return jsonify({k:v for k,v in strategy_v2_state.items() if k!='trades'})
+
+
+@app.route('/api/backtest/strategy/v2/results')
+def backtest_strategy_v2_results():
+    with strategy_v2_lock: return jsonify({'status':strategy_v2_state.get('status'),'summary':strategy_v2_state.get('summary',{}),'trades':strategy_v2_state.get('trades',[])})
+
+
+@app.route('/api/backtest/strategy/v2/run',methods=['POST'])
+def backtest_strategy_v2_run():
+    global strategy_v2_worker_running
+    with history_db_lock:
+        with _history_db_connect() as db:
+            five=db.execute("SELECT COUNT(DISTINCT symbol) FROM backtest_candles WHERE timeframe='5'").fetchone()[0]
+            daily=db.execute("SELECT COUNT(DISTINCT symbol) FROM backtest_candles WHERE timeframe='D'").fetchone()[0]
+            errors=db.execute("SELECT COUNT(*) FROM backtest_errors").fetchone()[0]
+    if not five or not daily: return jsonify({'error':'Historical 5-minute and daily data are required.'}),409
+    if errors: return jsonify({'error':f'{errors} historical data errors remain. Resolve them before running IVF V2.'}),409
+    with strategy_v2_lock:
+        if strategy_v2_worker_running: return jsonify({'ok':True,'message':'IVF V2 is already running.'})
+        strategy_v2_worker_running=True
+        strategy_v2_state.update({'status':'running','message':'IVF V2 calculation started.'})
+    threading.Thread(target=_strategy_v2_compute,name='backtest-strategy-v2-worker',daemon=True).start()
+    return jsonify({'ok':True,'message':'IVF V2 calculation started.'})
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', '8000')), debug=False)
