@@ -2319,6 +2319,7 @@ def backtest_start():
 # --------------------------- Strategy validation V1 ---------------------------
 BACKTEST_CAPITAL = 250000.0
 BACKTEST_BROKERAGE = 137.0  # User-specified flat brokerage/cost per completed trade.
+strategy_run_guard = threading.Lock()
 strategy_lock = threading.RLock()
 strategy_worker_running = False
 strategy_state = {
@@ -2579,11 +2580,15 @@ def backtest_strategy_run():
         return jsonify({'error':f'{errors} historical data errors remain. Resolve them before strategy validation.'}), 409
     if five == 0 or daily == 0:
         return jsonify({'error':'Historical 5-minute and daily data are required.'}), 409
-    with strategy_lock:
-        if strategy_worker_running:
-            return jsonify({'ok':True,'message':'Strategy validation is already running.'})
-        strategy_worker_running = True
-        strategy_state.update({'status':'running','message':'Calculating trades across stored historical candles.'})
+    with strategy_run_guard:
+        with strategy_v2_lock:
+            if strategy_v2_worker_running:
+                return jsonify({'error':'IVF V2 is running. Wait for it to finish before starting V1.'}), 409
+        with strategy_lock:
+            if strategy_worker_running:
+                return jsonify({'ok':True,'message':'Strategy validation is already running.'})
+            strategy_worker_running = True
+            strategy_state.update({'status':'running','message':'Calculating trades across stored historical candles.'})
     threading.Thread(target=_strategy_compute, name='backtest-strategy-worker', daemon=True).start()
     return jsonify({'ok':True,'message':'Strategy validation started.'})
 
@@ -2739,10 +2744,14 @@ def backtest_strategy_v2_run():
             errors=db.execute("SELECT COUNT(*) FROM backtest_errors").fetchone()[0]
     if not five or not daily: return jsonify({'error':'Historical 5-minute and daily data are required.'}),409
     if errors: return jsonify({'error':f'{errors} historical data errors remain. Resolve them before running IVF V2.'}),409
-    with strategy_v2_lock:
-        if strategy_v2_worker_running: return jsonify({'ok':True,'message':'IVF V2 is already running.'})
-        strategy_v2_worker_running=True
-        strategy_v2_state.update({'status':'running','message':'IVF V2 calculation started.'})
+    with strategy_run_guard:
+        with strategy_lock:
+            if strategy_worker_running:
+                return jsonify({'error':'V1 backtest is running. Wait for it to finish before starting IVF V2.'}), 409
+        with strategy_v2_lock:
+            if strategy_v2_worker_running: return jsonify({'ok':True,'message':'IVF V2 is already running.'})
+            strategy_v2_worker_running=True
+            strategy_v2_state.update({'status':'running','message':'IVF V2 calculation started.'})
     threading.Thread(target=_strategy_v2_compute,name='backtest-strategy-v2-worker',daemon=True).start()
     return jsonify({'ok':True,'message':'IVF V2 calculation started.'})
 
