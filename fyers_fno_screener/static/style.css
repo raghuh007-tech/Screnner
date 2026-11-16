@@ -451,3 +451,5 @@ tbody tr:hover{background:#18283a}
  .backtest-foot{flex-direction:column;gap:4px}
  .backtest-panel button{width:100%}
 }
+
+.tag-ivf{background:#2c2854;color:#c8baff;border:1px solid #6253a6}.ivf-cell{font-weight:850;color:#c8baff}
