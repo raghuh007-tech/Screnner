@@ -117,6 +117,22 @@
     <div class="backtest-progress"><div id="btProgressBar"></div></div>
     <div class="backtest-foot"><span id="btProgressText">Historical collection has not started.</span><span id="btDateRange">—</span></div>
     <p id="btMessage" class="backtest-message">No historical data has been collected for backtesting yet. Starting this job will not change the live scanner.</p>
+    <div class="panel-head" style="margin-top:16px">
+      <div><h2>Strategy validation</h2><p>₹2,50,000 per trade · ₹137 brokerage deducted per completed trade</p></div>
+      <button id="runStrategy" class="connect" type="button">Run Strategy Backtest</button>
+    </div>
+    <p id="strategyMessage" class="backtest-message">Waiting to run the strategy on collected historical data.</p>
+    <div class="backtest-grid" id="strategySummary">
+      <div><span>Total trades</span><strong id="stTrades">—</strong></div>
+      <div><span>Win rate</span><strong id="stWinRate">—</strong></div>
+      <div><span>Gross P&amp;L</span><strong id="stGross">—</strong></div>
+      <div><span>Brokerage</span><strong id="stBrokerage">—</strong></div>
+      <div><span>Net P&amp;L</span><strong id="stNet">—</strong></div>
+      <div><span>Max drawdown</span><strong id="stDD">—</strong></div>
+    </div>
+    <div class="table-wrap" style="margin-top:12px">
+      <table><thead><tr><th>Date / Stock</th><th>Entry</th><th>Stop</th><th>Exit</th><th>Qty</th><th>Net P&amp;L</th><th>Reason</th></tr></thead><tbody id="strategyTrades"><tr><td colspan="7" class="empty">No strategy results yet.</td></tr></tbody></table>
+    </div>
   </section>
   <section class="history-status">
     <span class="pulse"></span><span id="historyText">Historical baselines not loaded yet.</span>
