@@ -39,7 +39,7 @@ async function runFyersDataTest() {
   if (!button || !output) return;
   button.disabled = true;
   button.textContent = 'Testing…';
-  output.textContent = 'Checking quotes and 5-minute history…';
+  output.textContent = 'Checking 5 stocks…';
   output.className = 'status offline';
   try {
     const response = await fetch('/api/fyers-test-data', {
@@ -47,18 +47,23 @@ async function runFyersDataTest() {
       credentials: 'same-origin'
     });
     const data = await response.json();
-    const quote = data.quote || {};
-    const history = data.history || {};
-    output.textContent = `Quotes: ${quote.ok ? 'PASS' : 'FAIL'} · History: ${history.ok ? 'PASS' : 'FAIL'}`;
-    output.className = data.ok ? 'status online' : 'status offline';
-    if (data.ok) {
-      output.title = `SBIN LTP: ${quote.ltp} · ${history.candles} candles checked`;
-    } else {
-      output.title = [quote.message, history.message, data.message].filter(Boolean).join(' | ');
+    if (!response.ok || !data || !Array.isArray(data.quotes) || !Array.isArray(data.history)) {
+      throw new Error(data?.message || 'Unexpected test response.');
     }
-  } catch (_) {
+    const quotePassed = Number(data.quote_passed || 0);
+    const historyPassed = Number(data.history_passed || 0);
+    output.textContent = `Quotes: ${quotePassed}/5 · History: ${historyPassed}/5`;
+    output.className = data.ok ? 'status online' : 'status offline';
+    const quoteDetails = data.quotes.map(item =>
+      `${item.symbol}: ${item.ok ? 'PASS' : 'FAIL'}${item.ltp != null ? ' @ ' + item.ltp : ''}`
+    );
+    const historyDetails = data.history.map(item =>
+      `${item.symbol}: ${item.ok ? 'PASS' : 'FAIL'}${item.candles ? ' (' + item.candles + ' candles)' : ''}`
+    );
+    output.title = [...quoteDetails, ...historyDetails, data.message || ''].join(' | ');
+  } catch (error) {
     output.textContent = 'Data test failed';
-    output.title = 'Could not complete FYERS data test.';
+    output.title = error.message || 'Could not complete FYERS data test.';
     output.className = 'status offline';
   } finally {
     button.disabled = false;
