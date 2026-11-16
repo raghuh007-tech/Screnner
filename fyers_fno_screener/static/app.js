@@ -126,6 +126,7 @@ function signalClass(signal) {
   if (signal === 'NEAR 52W HIGH') return 'tag-ath';
   if (signal === '52W HIGH +2% + 3X') return 'tag-combo';
   if (signal === '3X VOLUME') return 'tag-volume';
+  if (signal === 'IVF') return 'tag-ivf';
   return 'tag-ath';
 }
 function badges(signals) {
@@ -160,7 +161,8 @@ function render() {
     const checks = [
       ['PDH BREAKOUT', 'PDH'],
       ['+2% MOMENTUM', '2%'],
-      ['3X VOLUME', '3× VOL'],
+      ['3X VOLUME', 'DAY 3×'],
+      ['IVF', 'IVF 5m'],
       ['NEAR 52W HIGH', '52W']
     ];
     const active = checks.filter(([signal]) => (row.signals || []).includes(signal));
