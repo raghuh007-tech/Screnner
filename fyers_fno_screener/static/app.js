@@ -455,3 +455,45 @@ $('startBacktest').addEventListener('click', async () => {
     button.textContent = 'Start / Resume Data Collection';
   }
 });
+
+
+// Independent, read-only IVF V2 audit
+async function refreshV2AuditStatus(){
+  try{
+    const s=await api('/api/backtest/strategy/v2/audit/status');
+    const label=$('v2AuditStatus');
+    const button=$('runV2Audit');
+    if(!label||!button)return;
+    label.textContent=s.message||s.status;
+    button.disabled=s.status==='running';
+    button.textContent=button.disabled?'Auditing…':'Independently Validate IVF V2';
+    if(s.status==='complete'){
+      const r=await api('/api/backtest/strategy/v2/audit/results');
+      const x=r.report||{};
+      $('v2AuditReport').textContent=[
+        'Saved trades: '+x.saved_trade_count+' · Independently rebuilt: '+x.rebuilt_trade_count,
+        'Matched: '+x.matched_trade_count+' · Mismatches: '+x.mismatch_count,
+        'Missing saved trades: '+(x.missing_saved_trades||[]).length+' · Unexpected saved trades: '+(x.unexpected_saved_trades||[]).length,
+        'Duplicate keys: '+(x.duplicate_saved_keys||[]).length+' saved / '+(x.duplicate_rebuilt_keys||[]).length+' rebuilt',
+        'Data quality issues: '+x.data_quality_issue_count,
+        'Rebuilt net P&L: '+money(x.rebuilt_summary?.net_pnl)+' · Rebuilt max DD: '+money(x.rebuilt_summary?.max_drawdown),
+        'Summary differences: '+Object.keys(x.summary_differences||{}).join(', '),
+        'Audit details available from the results endpoint.'
+      ].join('\n');
+    }
+  }catch(e){if($('v2AuditStatus'))$('v2AuditStatus').textContent='Audit status unavailable: '+e.message;}
+}
+if($('runV2Audit')){
+  $('runV2Audit').addEventListener('click',async()=>{
+    const b=$('runV2Audit');b.disabled=true;b.textContent='Starting audit…';
+    try{
+      const response=await fetch('/api/backtest/strategy/v2/audit/run',{method:'POST',credentials:'same-origin'});
+      const data=await response.json();
+      if(!response.ok)throw new Error(data.error||'Could not start audit');
+      $('v2AuditStatus').textContent=data.message||'Audit started.';
+      await refreshV2AuditStatus();
+    }catch(e){$('v2AuditStatus').textContent=e.message;b.disabled=false;b.textContent='Independently Validate IVF V2';}
+  });
+  setInterval(refreshV2AuditStatus,5000);
+  refreshV2AuditStatus();
+}
