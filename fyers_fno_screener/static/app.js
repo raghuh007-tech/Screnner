@@ -150,11 +150,12 @@ function render() {
       <td class="${changeClass}">${formatChange(row.change_pct)}</td>
       <td><span class="sentiment-tag ${sentimentClass(row.sentiment)}">${esc(row.sentiment || 'Neutral')}</span></td>
       <td class="vol-cell">${row.volume_ratio == null ? '—' : fmt(row.volume_ratio,2)+'×'}</td>
+      <td class="ivf-cell">${row.ivf_volume_ratio == null ? '—' : fmt(row.ivf_volume_ratio,2)+'×'}${row.ivf_candle_time ? '<small class="ivf-time">'+esc(row.ivf_candle_time)+'</small>' : ''}</td>
       <td>${fmt(row.volume,0)}</td>
       <td>${fmt(row.prev_day_high)}</td>
       <td>${highGap(row)}</td>
     </tr>`;
-  }).join('') : '<tr><td colspan="8" class="empty">No stocks currently match these filters.</td></tr>';
+  }).join('') : '<tr><td colspan="9" class="empty">No stocks currently match these filters.</td></tr>';
 
   $('mobileRows').innerHTML = matches.length ? matches.map(row => {
     const changeClass = Number(row.change_pct) >= 0 ? 'positive' : 'negative';
@@ -168,7 +169,7 @@ function render() {
     const active = checks.filter(([signal]) => (row.signals || []).includes(signal));
     const compactTags = active.map(([, label]) => `<span class="compact-confirm">${label}</span>`).join('');
     return `<button type="button" class="stock-row" data-symbol="${esc(row.symbol)}">
-      <span class="stock-row-main"><b class="stock-row-name">${esc(row.symbol)}</b>${tradePlanInline(row.ltp)}<span class="stock-row-price">${fmt(row.ltp)}</span><span class="stock-row-change ${changeClass}">${formatChange(row.change_pct)}</span><b class="confirmation-count">${active.length}/4</b></span>
+      <span class="stock-row-main"><b class="stock-row-name">${esc(row.symbol)}</b>${tradePlanInline(row.ltp)}<span class="stock-row-price">${fmt(row.ltp)}</span><span class="stock-row-change ${changeClass}">${formatChange(row.change_pct)}</span><b class="confirmation-count">${active.length}/5</b></span>
       <span class="stock-row-confirmations">${compactTags}</span>
     </button>`;
   }).join('') : '<div class="empty">No stocks currently match these filters.</div>';
