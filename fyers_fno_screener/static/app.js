@@ -94,8 +94,10 @@ async function runFyersDiagnostic() {
     button.textContent = 'Run F&O Diagnostic';
   }
 }
-const fyersDiagnosticButton = $('runFyersDiagnostic');
-if (fyersDiagnosticButton) fyersDiagnosticButton.addEventListener('click', runFyersDiagnostic);
+document.addEventListener('click', event => {
+  const trigger = event.target && event.target.closest ? event.target.closest('#runFyersDiagnostic') : null;
+  if (trigger) runFyersDiagnostic();
+});
 
 
 
