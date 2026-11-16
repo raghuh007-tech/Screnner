@@ -1955,6 +1955,156 @@ def ivf_volume_spike_scan():
     })
 
 
+@app.route('/api/ivf/volume-method-comparison')
+def ivf_volume_method_comparison():
+    """Read-only historical comparison of cumulative RVOL and same-slot RVOL."""
+    target_date = request.args.get('date', datetime.now(IST).date().isoformat())
+    try:
+        target = datetime.strptime(target_date, '%Y-%m-%d').date()
+    except ValueError:
+        return jsonify({'error': 'date must be YYYY-MM-DD'}), 400
+
+    with history_db_lock:
+        with _history_db_connect() as db:
+            five_rows = db.execute(
+                "SELECT symbol, candles_json FROM candle_cache WHERE timeframe='5m'"
+            ).fetchall()
+            daily_rows = db.execute(
+                "SELECT symbol, candles_json FROM candle_cache WHERE timeframe='1d'"
+            ).fetchall()
+
+    daily_by_symbol = {}
+    for symbol, raw in daily_rows:
+        try:
+            daily_by_symbol[symbol] = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+
+    results = []
+    missing_history = 0
+    skipped_baseline = 0
+    for symbol, raw in five_rows:
+        try:
+            source = json.loads(raw)
+            bars = []
+            for c in source:
+                if not isinstance(c, (list, tuple)) or len(c) < 6:
+                    continue
+                stamp = int(c[0])
+                dt = datetime.fromtimestamp(stamp, IST)
+                bars.append({
+                    'stamp': stamp, 'date': dt.date(), 'minute': dt.hour * 60 + dt.minute,
+                    'open': float(c[1]), 'high': float(c[2]), 'low': float(c[3]),
+                    'close': float(c[4]), 'volume': float(c[5] or 0),
+                })
+            bars.sort(key=lambda x: x['stamp'])
+            today = [b for b in bars if b['date'] == target and 9*60+15 <= b['minute'] < 15*60+30]
+            prior = [b for b in bars if b['date'] < target]
+            if not today or not prior:
+                missing_history += 1
+                continue
+
+            daily_info = daily_by_symbol.get(symbol)
+            pdh = daily_info.get('prev_day_high') if isinstance(daily_info, dict) else None
+            if pdh is None:
+                continue
+            pdh = float(pdh)
+            prev_close = prior[-1]['close']
+            if prev_close <= 0:
+                continue
+
+            final_close = today[-1]['close']
+            final_change = (final_close / prev_close - 1.0) * 100.0
+            # Analyse only stocks that ended the session above +2% and above PDH.
+            if final_change < 2.0 or final_close <= pdh:
+                continue
+
+            sessions = {}
+            for b in prior:
+                if b['minute'] < 15*60+30 and b['minute'] >= 9*60+15:
+                    sessions.setdefault(b['date'], {})[b['minute']] = b['volume']
+            prior_dates = sorted(sessions.keys())[-20:]
+            if len(prior_dates) < 20:
+                skipped_baseline += 1
+                continue
+
+            # Calculate first time both price filters were true on a completed candle.
+            first_gate = None
+            for b in today:
+                change = (b['close'] / prev_close - 1.0) * 100.0
+                if change >= 2.0 and b['close'] > pdh:
+                    first_gate = b['minute']
+                    break
+
+            cumulative_today = 0.0
+            first_cumulative = None
+            first_slot = None
+            max_cum_ratio = 0.0
+            max_slot_ratio = 0.0
+            for b in today:
+                cumulative_today += b['volume']
+                minute = b['minute']
+                cumulative_samples = []
+                slot_samples = []
+                for day in prior_dates:
+                    day_data = sessions[day]
+                    if minute not in day_data:
+                        continue
+                    slot_samples.append(day_data[minute])
+                    cumulative_samples.append(sum(v for m, v in day_data.items() if m <= minute))
+                if len(cumulative_samples) < 20 or len(slot_samples) < 20:
+                    continue
+                avg_cum = sum(cumulative_samples) / 20.0
+                avg_slot = sum(slot_samples) / 20.0
+                cum_ratio = cumulative_today / avg_cum if avg_cum > 0 else 0.0
+                slot_ratio = b['volume'] / avg_slot if avg_slot > 0 else 0.0
+                max_cum_ratio = max(max_cum_ratio, cum_ratio)
+                max_slot_ratio = max(max_slot_ratio, slot_ratio)
+                if first_cumulative is None and cum_ratio >= 3.0:
+                    first_cumulative = minute
+                if first_slot is None and slot_ratio >= 3.0:
+                    first_slot = minute
+
+            def fmt(minute):
+                return f"{minute//60:02d}:{minute%60:02d}" if minute is not None else None
+
+            def lead(volume_minute):
+                if volume_minute is None or first_gate is None:
+                    return None
+                return first_gate - volume_minute
+
+            results.append({
+                'symbol': symbol.replace('NSE:', '').replace('-EQ', ''),
+                'change_pct': round(final_change, 2),
+                'last_price': round(final_close, 2),
+                'pdh': round(pdh, 2),
+                'first_both_2pct_pdh_time': fmt(first_gate),
+                'first_cumulative_rvol_3x_time': fmt(first_cumulative),
+                'first_same_slot_rvol_3x_time': fmt(first_slot),
+                'cumulative_lead_minutes_before_gate': lead(first_cumulative),
+                'same_slot_lead_minutes_before_gate': lead(first_slot),
+                'max_cumulative_rvol': round(max_cum_ratio, 2),
+                'max_same_slot_rvol': round(max_slot_ratio, 2),
+                'baseline_sessions': 20,
+            })
+        except (TypeError, ValueError, json.JSONDecodeError, OverflowError, OSError):
+            continue
+
+    results.sort(key=lambda x: x['change_pct'], reverse=True)
+    return jsonify({
+        'date': target_date,
+        'scope': 'F&O symbols in persisted candle cache that closed above +2% and PDH',
+        'method_1': 'Cumulative volume from 09:15 through each completed candle divided by average cumulative volume at the same time over the previous 20 trading sessions',
+        'method_2': 'Each completed 5-minute candle volume divided by average volume of the same 5-minute slot over the previous 20 trading sessions',
+        'trigger': '3.0x',
+        'matched_stocks': len(results),
+        'stocks': results,
+        'symbols_missing_today_or_previous_close': missing_history,
+        'symbols_with_insufficient_20_session_baseline': skipped_baseline,
+        'note': 'Read-only analysis. No dashboard logic, alerts, V2 backtest, saved trades, or broker orders are changed.',
+    })
+
+
 @app.route('/api/scan')
 def scan():
     try:
