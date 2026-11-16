@@ -52,8 +52,13 @@ async function runFyersDataTest() {
     }
     const quotePassed = Number(data.quote_passed || 0);
     const historyPassed = Number(data.history_passed || 0);
-    const failedHistory = data.history.filter(item => !item.ok).map(item => item.symbol.replace('NSE:', '').replace('-EQ', ''));
-    output.textContent = `Quotes: ${quotePassed}/5 · History: ${historyPassed}/5` + (failedHistory.length ? ` · Failed: ${failedHistory.join(', ')}` : '');
+    const failedHistory = data.history.filter(item => !item.ok);
+    const failureText = failedHistory.map(item => {
+      const symbol = item.symbol.replace('NSE:', '').replace('-EQ', '');
+      const reason = item.message || `HTTP ${item.http_status || '—'} · API ${item.api_status || '—'} · code ${item.api_code ?? '—'}`;
+      return `${symbol}: ${reason}`;
+    });
+    output.textContent = `Quotes: ${quotePassed}/5 · History: ${historyPassed}/5` + (failureText.length ? ` · ${failureText.join(' | ')}` : '');
     output.className = data.ok ? 'status online' : 'status offline';
     const quoteDetails = data.quotes.map(item =>
       `${item.symbol}: ${item.ok ? 'PASS' : 'FAIL'}${item.ltp != null ? ' @ ' + item.ltp : ''}`
