@@ -1667,10 +1667,18 @@ def fyers_test_data():
                     'symbol': symbol,
                     'ok': history_ok,
                     'candles': len(candles) if history_ok else 0,
+                    'http_status': history_response.status_code,
+                    'api_status': history_data.get('s'),
+                    'api_code': history_data.get('code'),
+                    'message': '' if history_ok else str(
+                        history_data.get('message') or history_data.get('errmsg') or
+                        ('No candles returned' if not candles else 'FYERS history request failed')
+                    )[:180],
                 })
-            except Exception:
+            except Exception as exc:
                 result['history'].append({
                     'symbol': symbol, 'ok': False, 'candles': 0,
+                    'message': str(exc)[:180],
                 })
 
         result['quote_passed'] = sum(1 for item in result['quotes'] if item['ok'])
