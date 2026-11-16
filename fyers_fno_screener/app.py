@@ -2396,7 +2396,10 @@ def _strategy_compute():
                         old_t = _bt_candle_time(old_c)
                         if (old_t.hour, old_t.minute) < (9, 15):
                             continue
-                        if (old_t.hour, old_t.minute) >= (entry_time.hour, entry_time.minute):
+                        # Include the historical candle at the entry timestamp.
+                        # Current cumulative volume also includes the entry candle,
+                        # so both sides use the same inclusive time boundary.
+                        if (old_t.hour, old_t.minute) > (entry_time.hour, entry_time.minute):
                             break
                         cum += float(old_c[5])
                         seen += 1
