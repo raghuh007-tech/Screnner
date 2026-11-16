@@ -111,7 +111,65 @@ history_meta = {}
 # do not refresh all 218 symbols every minute.
 chart_history_refresh_at = {}
 chart_history_refresh_lock = threading.Lock()
+
 CHART_HISTORY_REFRESH_SECONDS = 45
+
+# IVF refreshes only PDH-breakout candidates, not the full F&O universe.
+ivf_refresh_lock = threading.Lock()
+ivf_refresh_running = False
+ivf_refresh_at = {}
+IVF_REFRESH_SECONDS = 60
+
+
+def refresh_ivf_candidate_history(symbol):
+    now = datetime.now(IST)
+    with ivf_refresh_lock:
+        last = ivf_refresh_at.get(symbol, 0)
+        if time.monotonic() - last < IVF_REFRESH_SECONDS:
+            return
+        ivf_refresh_at[symbol] = time.monotonic()
+    try:
+        today = now.date()
+        recent = fetch_history(symbol, '5', today.isoformat(), today.isoformat())
+        if not recent:
+            return
+        with lock:
+            existing = cache['intraday'].get(symbol, [])
+            merged = merge_candles(existing, recent)
+            cutoff = today - timedelta(days=45)
+            merged = [
+                candle for candle in merged
+                if len(candle) >= 6
+                and datetime.fromtimestamp(int(candle[0]), IST).date() >= cutoff
+            ]
+            cache['intraday'][symbol] = merged
+        save_history(symbol, '5m', merged, today.isoformat())
+    except Exception as exc:
+        app.logger.warning('IVF 5m refresh failed for %s: %s', symbol, exc)
+        with ivf_refresh_lock:
+            ivf_refresh_at[symbol] = 0
+
+
+def start_ivf_refresh(symbols):
+    global ivf_refresh_running
+    candidates = list(dict.fromkeys(symbols))
+    if not candidates:
+        return
+    with ivf_refresh_lock:
+        if ivf_refresh_running:
+            return
+        ivf_refresh_running = True
+
+    def worker():
+        global ivf_refresh_running
+        try:
+            for symbol in candidates:
+                refresh_ivf_candidate_history(symbol)
+        finally:
+            with ivf_refresh_lock:
+                ivf_refresh_running = False
+
+    threading.Thread(target=worker, daemon=True, name='ivf-candle-refresh').start()
 
 
 def refresh_chart_history(symbol):
@@ -1641,6 +1699,13 @@ def scan():
             row = build_scan_row(symbol, quote, now)
             if row:
                 rows.append(row)
+        # Refresh today's 5m candles only for stocks currently above PDH.
+        # Updated candles feed the IVF calculation on the next 60-second scan.
+        start_ivf_refresh([
+            row['symbol'] if row['symbol'].startswith('NSE:') else _normalise_symbol(row['symbol'])
+            for row in rows if row.get('prev_day_high') is not None
+            and row.get('ltp') is not None and row['ltp'] > row['prev_day_high']
+        ])
         rows.sort(key=lambda row: (row['signal_count'], row.get('volume_ratio') or 0, row.get('change_pct') or 0), reverse=True)
         with lock:
             ready = sum(1 for symbol in symbols if symbol in cache['intraday'] and symbol in cache['daily'])
