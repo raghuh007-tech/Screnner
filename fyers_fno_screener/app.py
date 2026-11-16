@@ -1816,6 +1816,140 @@ def ivf_first_candle_scan():
     })
 
 
+@app.route('/api/ivf/volume-spike-scan')
+def ivf_volume_spike_scan():
+    """Read-only daily scan of volume spikes among +2% and PDH-breakout F&O stocks."""
+    target_date = request.args.get('date', datetime.now(IST).date().isoformat())
+    try:
+        target = datetime.strptime(target_date, '%Y-%m-%d').date()
+    except ValueError:
+        return jsonify({'error': 'date must be YYYY-MM-DD'}), 400
+
+    # candle_cache contains the F&O universe's persisted 5-minute history.
+    # The daily cache supplies the previous-session high (PDH).
+    with history_db_lock:
+        with _history_db_connect() as db:
+            five_rows = db.execute(
+                "SELECT symbol, candles_json FROM candle_cache WHERE timeframe='5m'"
+            ).fetchall()
+            daily_rows = db.execute(
+                "SELECT symbol, candles_json FROM candle_cache WHERE timeframe='1d'"
+            ).fetchall()
+
+    daily_by_symbol = {}
+    for symbol, raw in daily_rows:
+        try:
+            daily_by_symbol[symbol] = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+
+    stocks = []
+    missing_today = 0
+    missing_pdh_or_previous_close = 0
+    insufficient_baseline = 0
+    for symbol, raw in five_rows:
+        try:
+            candles = json.loads(raw)
+            parsed = []
+            for candle in candles:
+                if not isinstance(candle, (list, tuple)) or len(candle) < 6:
+                    continue
+                stamp = int(candle[0])
+                parsed.append((stamp, float(candle[1]), float(candle[2]),
+                               float(candle[3]), float(candle[4]), float(candle[5])))
+            parsed.sort(key=lambda item: item[0])
+            today_bars = [
+                bar for bar in parsed
+                if datetime.fromtimestamp(bar[0], IST).date() == target
+            ]
+            prior_bars = [
+                bar for bar in parsed
+                if datetime.fromtimestamp(bar[0], IST).date() < target
+            ]
+            if not today_bars:
+                missing_today += 1
+                continue
+            if not prior_bars:
+                missing_pdh_or_previous_close += 1
+                continue
+
+            previous_close = prior_bars[-1][4]
+            today_close = today_bars[-1][4]
+            if previous_close <= 0:
+                continue
+            change_pct = (today_close / previous_close - 1.0) * 100.0
+
+            daily_info = daily_by_symbol.get(symbol)
+            if isinstance(daily_info, dict):
+                pdh = daily_info.get('prev_day_high')
+            else:
+                pdh = None
+            if pdh is None:
+                missing_pdh_or_previous_close += 1
+                continue
+            pdh = float(pdh)
+
+            # Candidate gate is evaluated on the latest completed candle of the day.
+            if change_pct < 2.0 or today_close <= pdh:
+                continue
+
+            # For every candle today, compare volume with the preceding 100
+            # completed 5-minute candles, including prior-day candles.
+            all_prior_volumes = []
+            spikes = []
+            for bar in parsed:
+                stamp, opn, high, low, close, volume = bar
+                if datetime.fromtimestamp(stamp, IST).date() != target:
+                    continue
+                if len(all_prior_volumes) >= 100:
+                    baseline = sum(all_prior_volumes[-100:]) / 100.0
+                    if baseline > 0:
+                        multiple = volume / baseline
+                        if multiple >= 3.0:
+                            candle_time = datetime.fromtimestamp(stamp, IST)
+                            spikes.append({
+                                'time': candle_time.strftime('%H:%M'),
+                                'volume': volume,
+                                'average_previous_100_5m_volume': round(baseline, 2),
+                                'volume_multiple': round(multiple, 2),
+                                'open': opn, 'high': high, 'low': low, 'close': close,
+                                'signal': ('exceptional' if multiple >= 8.0
+                                           else 'strong' if multiple >= 5.0 else 'spike'),
+                            })
+                all_prior_volumes.append(volume)
+
+            if spikes:
+                stocks.append({
+                    'symbol': symbol.replace('NSE:', '').replace('-EQ', ''),
+                    'change_pct': round(change_pct, 2),
+                    'last_price': round(today_close, 2),
+                    'pdh': round(pdh, 2),
+                    'pdh_breakout': True,
+                    'spike_count': len(spikes),
+                    'spikes': spikes,
+                })
+        except (TypeError, ValueError, json.JSONDecodeError, OverflowError, OSError):
+            continue
+
+    stocks.sort(key=lambda item: (item['spike_count'],
+                                  max((x['volume_multiple'] for x in item['spikes']), default=0)),
+                reverse=True)
+    return jsonify({
+        'date': target_date,
+        'universe': 'F&O stocks represented in persisted scanner history',
+        'candidate_filter': 'latest completed 5-minute close is at least 2% above previous session close and above PDH',
+        'volume_rule': 'each 5-minute candle today compared with average volume of the previous 100 completed 5-minute candles; current candle excluded',
+        'spike_threshold': '>=3x; strong >=5x; exceptional >=8x',
+        'matched_stocks': len(stocks),
+        'stocks': stocks,
+        'symbols_missing_today_candles': missing_today,
+        'symbols_missing_pdh_or_previous_close': missing_pdh_or_previous_close,
+        'symbols_with_insufficient_100_candle_baseline': insufficient_baseline,
+        'source': 'persisted scanner 5-minute and daily candle cache',
+        'note': 'Read-only scan. No V2 backtest, saved trades, or broker orders are changed.',
+    })
+
+
 @app.route('/api/scan')
 def scan():
     try:
