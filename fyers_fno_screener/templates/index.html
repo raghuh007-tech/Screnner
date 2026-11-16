@@ -138,6 +138,8 @@
     <div class="panel-head"><div><h2>IVF Version 2 Backtest</h2><p>9:25 IVF ≥3× same-slot 20-session average · PDH mandatory · ₹2,50,000 per trade</p></div>
       <div class="backtest-actions"><a class="connect" href="/api/backtest/strategy/v2/download">Save JSON</a><button id="runStrategyV2" class="connect" type="button">Run IVF V2 Backtest</button></div></div>
     <p id="strategyV2Message" class="backtest-message">Separate from V1. Uses the existing stored historical candles.</p>
+     <div class="backtest-actions" style="margin:10px 0"><button id="runV2Audit" class="connect" type="button">Independently Validate 380 Trades</button><span id="v2AuditStatus" class="backtest-message">Read-only audit · Original data will not be changed.</span></div>
+     <div id="v2AuditReport" class="backtest-message" style="white-space:pre-wrap"></div>
     <div class="backtest-grid">
       <div><span>Total trades</span><strong id="v2Trades">—</strong></div>
       <div><span>Win rate</span><strong id="v2WinRate">—</strong></div>
