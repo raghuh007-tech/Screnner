@@ -369,6 +369,43 @@ async function refreshBacktestStatus() {
     $('btMessage').textContent = 'Backtest status unavailable: ' + error.message;
   }
 }
+
+function money(v) { return '₹' + Number(v || 0).toLocaleString('en-IN',{maximumFractionDigits:0}); }
+async function refreshStrategyStatus() {
+  try {
+    const s = await api('/api/backtest/strategy/status');
+    $('strategyMessage').textContent = s.message || s.status;
+    $('runStrategy').disabled = s.status === 'running';
+    $('runStrategy').textContent = s.status === 'running' ? 'Calculating…' : 'Run Strategy Backtest';
+    if (s.status === 'complete') {
+      const r = await api('/api/backtest/strategy/results');
+      const x = r.summary || {};
+      $('stTrades').textContent = fmt(x.total_trades || 0,0);
+      $('stWinRate').textContent = fmt(x.win_rate_pct || 0,1) + '%';
+      $('stGross').textContent = money(x.gross_pnl);
+      $('stBrokerage').textContent = money(x.brokerage_total);
+      $('stNet').textContent = money(x.net_pnl);
+      $('stDD').textContent = money(x.max_drawdown);
+      $('strategyTrades').innerHTML = (r.trades || []).slice(0,250).map(t =>
+        '<tr><td>' + t.date + '<br>' + t.symbol + '</td><td>' + t.entry + '<br>' + t.entry_time + '</td><td>' + t.stop + '</td><td>' + t.exit + '<br>' + t.exit_time + '</td><td>' + t.qty + '</td><td>' + money(t.net_pnl) + '</td><td>' + t.exit_reason + '</td></tr>'
+      ).join('') || '<tr><td colspan="7" class="empty">No qualifying trades found.</td></tr>';
+      $('strategyMessage').textContent = x.data_note || s.message;
+    }
+  } catch(e) { $('strategyMessage').textContent = 'Strategy status unavailable: ' + e.message; }
+}
+$('runStrategy').addEventListener('click', async () => {
+  const b = $('runStrategy'); b.disabled = true; b.textContent = 'Starting…';
+  try {
+    const response = await fetch('/api/backtest/strategy/run',{method:'POST',credentials:'same-origin'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not start strategy validation');
+    $('strategyMessage').textContent = data.message || 'Strategy validation started.';
+    await refreshStrategyStatus();
+  } catch(e) { $('strategyMessage').textContent = e.message; b.disabled=false; b.textContent='Run Strategy Backtest'; }
+});
+setInterval(refreshStrategyStatus, 5000);
+refreshStrategyStatus();
+
 $('startBacktest').addEventListener('click', async () => {
   const button = $('startBacktest');
   button.disabled = true;
