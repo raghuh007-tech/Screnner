@@ -10,7 +10,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <title>Oldpal Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css?v=16">
+  <link rel="stylesheet" href="/static/style.css?v=17">
 </head>
 <body>
 <div class="shell">
@@ -73,7 +73,8 @@
       <option value="all">All signals</option>
       <option value="PDH BREAKOUT">PDH breakout</option>
       <option value="+2% MOMENTUM">+2% momentum</option>
-      <option value="3X VOLUME">3× volume</option>
+      <option value="3X VOLUME">3× cumulative volume</option>
+      <option value="IVF">IVF · PDH + 3× 5m volume</option>
       <option value="NEAR 52W HIGH">Near 52W high</option>
       <option value="52W HIGH +2% + 3X">52W high +2% + 3X</option>
       <option value="multiple">Multiple signals</option>
@@ -94,7 +95,7 @@
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Stock / sector / signals</th><th>LTP</th><th>Chg %</th><th>Sentiment</th><th>Vol ×</th><th>Day volume</th><th>PDH</th><th>52W high gap</th></tr></thead>
+        <thead><tr><th>Stock / sector / signals</th><th>LTP</th><th>Chg %</th><th>Sentiment</th><th>Day Vol ×</th><th>IVF 5m ×</th><th>Day volume</th><th>PDH</th><th>52W high gap</th></tr></thead>
         <tbody id="rows"><tr><td colspan="8" class="empty">Connect {{ broker_name }} to start the scan.</td></tr></tbody>
       </table>
     </div>
@@ -131,6 +132,6 @@
 <div class="chart-timeframes"><button data-tf="1" type="button">1m</button><button class="active" data-tf="5" type="button">5m</button><button data-tf="15" type="button">15m</button><button data-tf="60" type="button">1h</button></div>
 <div id="stockChart" class="stock-chart"></div><div id="chartMessage" class="chart-message">Loading candles and volume…</div>
 </section></div>
-<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=16"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=17"></script>
 </body>
 </html>
