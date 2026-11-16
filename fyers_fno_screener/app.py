@@ -1754,6 +1754,68 @@ def universe():
         return jsonify({'error': str(exc)}), 500
 
 
+@app.route('/api/ivf/first-candle-scan')
+def ivf_first_candle_scan():
+    """Read-only scan: today's 09:15 5m volume vs prior 20 sessions' same slot."""
+    target_date = request.args.get('date', datetime.now(IST).date().isoformat())
+    try:
+        target = datetime.strptime(target_date, '%Y-%m-%d').date()
+    except ValueError:
+        return jsonify({'error': 'date must be YYYY-MM-DD'}), 400
+
+    results = []
+    insufficient = 0
+    missing_today = 0
+    with history_db_lock:
+        with _history_db_connect() as db:
+            rows = db.execute(
+                "SELECT symbol, candles_json FROM candle_cache WHERE timeframe='5m'"
+            ).fetchall()
+
+    for symbol, raw in rows:
+        try:
+            candles = json.loads(raw)
+            by_date = {}
+            for candle in candles:
+                if not isinstance(candle, (list, tuple)) or len(candle) < 6:
+                    continue
+                stamp = datetime.fromtimestamp(int(candle[0]), IST)
+                if stamp.time().hour == 9 and stamp.time().minute == 15:
+                    by_date[stamp.date().isoformat()] = float(candle[5])
+            today_volume = by_date.get(target_date)
+            if today_volume is None:
+                missing_today += 1
+                continue
+            prior_dates = sorted(d for d in by_date if d < target_date)[-20:]
+            if len(prior_dates) < 20:
+                insufficient += 1
+                continue
+            average_volume = sum(by_date[d] for d in prior_dates) / 20.0
+            if average_volume <= 0:
+                continue
+            ratio = today_volume / average_volume
+            if ratio >= 3.0:
+                results.append({
+                    'symbol': symbol.replace('NSE:', '').replace('-EQ', ''),
+                    'today_volume': today_volume,
+                    'average_first_5m_volume_20d': round(average_volume, 2),
+                    'ivf': round(ratio, 2),
+                })
+        except (TypeError, ValueError, json.JSONDecodeError, OverflowError, OSError):
+            continue
+
+    results.sort(key=lambda item: item['ivf'], reverse=True)
+    return jsonify({
+        'date': target_date,
+        'rule': '09:15-09:20 volume >= 3x average same 5-minute slot over previous 20 sessions',
+        'matched': len(results),
+        'stocks': results,
+        'symbols_missing_today_candle': missing_today,
+        'symbols_with_insufficient_20_session_history': insufficient,
+        'source': 'persisted scanner 5-minute candle cache',
+    })
+
+
 @app.route('/api/scan')
 def scan():
     try:
