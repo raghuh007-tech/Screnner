@@ -69,37 +69,6 @@ const fyersTestButton = $('testFyersData');
 if (fyersTestButton) fyersTestButton.addEventListener('click', runFyersDataTest);
 
 
-async function runFyersDiagnostic() {
-  const button = $('runFyersDiagnostic');
-  const output = $('fyersDiagnosticResult');
-  if (!button || !output) return;
-  button.disabled = true;
-  button.textContent = 'Checking…';
-  output.textContent = 'Loading F&O universe and testing quote/history coverage…';
-  output.className = 'status offline';
-  try {
-    const response = await fetch('/api/fyers-diagnostic', {method:'POST', credentials:'same-origin'});
-    const data = await response.json();
-    if (!response.ok || !data.universe_count) throw new Error(data.message || 'Diagnostic failed');
-    const historyOk = (data.history_samples || []).filter(x => x.ok).length;
-    output.textContent = `F&O ${data.universe_count} · Quotes ${data.quote_ok_count}/${data.universe_count} · History ${historyOk}/${data.history_samples.length}`;
-    output.className = data.ok ? 'status online' : 'status offline';
-    output.title = `Missing quotes: ${(data.missing_symbols || []).join(', ') || 'None'} · Failed batches: ${(data.quote_failed_batches || []).length} · Active broker: ${data.active_broker_unchanged}`;
-  } catch (error) {
-    output.textContent = 'F&O diagnostic failed';
-    output.title = error.message || 'Check server logs.';
-    output.className = 'status offline';
-  } finally {
-    button.disabled = false;
-    button.textContent = 'Run F&O Diagnostic';
-  }
-}
-document.addEventListener('click', event => {
-  const trigger = event.target && event.target.closest ? event.target.closest('#runFyersDiagnostic') : null;
-  if (trigger) runFyersDiagnostic();
-});
-
-
 
 async function updateStatus() {
   try {
