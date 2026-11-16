@@ -19,6 +19,8 @@ import requests
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, redirect, request, session, url_for
 
+from ivf_v2_validator import validate_ivf_v2
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -2710,6 +2712,86 @@ def _strategy_v2_compute():
         with strategy_v2_lock: strategy_v2_state.update({'status':'error','message':'IVF V2 failed. Check server logs.','error':str(exc)})
     finally:
         with strategy_v2_lock: strategy_v2_worker_running=False
+
+
+# --------------------------- Independent IVF V2 audit ---------------------------
+ivf_v2_audit_lock = threading.RLock()
+ivf_v2_audit_running = False
+ivf_v2_audit_state = {
+    'status': 'not_run',
+    'message': 'Independent IVF V2 audit has not been run.',
+    'report': None,
+}
+
+
+def _run_ivf_v2_audit():
+    global ivf_v2_audit_running
+    with ivf_v2_audit_lock:
+        ivf_v2_audit_state.update({
+            'status': 'running',
+            'message': 'Recalculating IVF V2 independently from stored candles. Read-only audit.',
+            'report': None,
+        })
+    try:
+        # Separate read-only SQLite connection. No table writes or backtest reruns.
+        db_uri = 'file:' + os.path.abspath(HISTORY_DB_PATH) + '?mode=ro'
+        db = sqlite3.connect(db_uri, uri=True, timeout=30)
+        db.row_factory = sqlite3.Row
+        try:
+            row = db.execute(
+                "SELECT payload_json FROM backtest_results WHERE strategy_key='v2'"
+            ).fetchone()
+            if row is None:
+                raise RuntimeError('No saved IVF V2 result exists in the history database.')
+            saved = json.loads(row['payload_json'])
+            if saved.get('status') != 'complete':
+                raise RuntimeError('Saved IVF V2 result is not complete.')
+            from ivf_v2_validator import validate_ivf_v2
+            report = validate_ivf_v2(db, saved.get('trades', []), saved.get('summary', {}))
+            report['saved_result_updated_at'] = saved.get('updated_at')
+        finally:
+            db.close()
+        with ivf_v2_audit_lock:
+            ivf_v2_audit_state.update({
+                'status': 'complete',
+                'message': 'Independent IVF V2 audit complete. Original results and candles were not modified.',
+                'report': report,
+                'updated_at': datetime.now(IST).isoformat(),
+            })
+    except Exception as exc:
+        app.logger.exception('Independent IVF V2 audit failed: %s', exc)
+        with ivf_v2_audit_lock:
+            ivf_v2_audit_state.update({
+                'status': 'error',
+                'message': 'Independent audit failed. Check server logs.',
+                'error': str(exc),
+            })
+    finally:
+        with ivf_v2_audit_lock:
+            ivf_v2_audit_running = False
+
+
+@app.route('/api/backtest/strategy/v2/audit/status')
+def backtest_strategy_v2_audit_status():
+    with ivf_v2_audit_lock:
+        return jsonify({k: v for k, v in ivf_v2_audit_state.items() if k != 'report'})
+
+
+@app.route('/api/backtest/strategy/v2/audit/results')
+def backtest_strategy_v2_audit_results():
+    with ivf_v2_audit_lock:
+        return jsonify(ivf_v2_audit_state)
+
+
+@app.route('/api/backtest/strategy/v2/audit/run', methods=['POST'])
+def backtest_strategy_v2_audit_run():
+    global ivf_v2_audit_running
+    with ivf_v2_audit_lock:
+        if ivf_v2_audit_running:
+            return jsonify({'ok': True, 'message': 'Independent audit is already running.'})
+        ivf_v2_audit_running = True
+    threading.Thread(target=_run_ivf_v2_audit, name='ivf-v2-independent-audit', daemon=True).start()
+    return jsonify({'ok': True, 'message': 'Independent read-only audit started.'})
 
 
 @app.route('/api/backtest/strategy/v2/status')
