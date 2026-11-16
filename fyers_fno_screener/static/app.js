@@ -371,13 +371,16 @@ async function refreshBacktestStatus() {
 }
 
 function money(v) { return '₹' + Number(v || 0).toLocaleString('en-IN',{maximumFractionDigits:0}); }
+let strategyResultsLoaded = false;
+let strategyV2ResultsLoaded = false;
 async function refreshStrategyStatus() {
   try {
     const s = await api('/api/backtest/strategy/status');
     $('strategyMessage').textContent = s.message || s.status;
     $('runStrategy').disabled = s.status === 'running';
     $('runStrategy').textContent = s.status === 'running' ? 'Calculating…' : 'Run Strategy Backtest';
-    if (s.status === 'complete') {
+    if (s.status === 'running') strategyResultsLoaded = false;
+    if (s.status === 'complete' && !strategyResultsLoaded) {
       const r = await api('/api/backtest/strategy/results');
       const x = r.summary || {};
       $('stTrades').textContent = fmt(x.total_trades || 0,0);
@@ -390,10 +393,12 @@ async function refreshStrategyStatus() {
         '<tr><td>' + t.date + '<br>' + t.symbol + '</td><td>' + t.entry + '<br>' + t.entry_time + '</td><td>' + t.stop + '</td><td>' + t.exit + '<br>' + t.exit_time + '</td><td>' + t.qty + '</td><td>' + money(t.net_pnl) + '</td><td>' + t.exit_reason + '</td></tr>'
       ).join('') || '<tr><td colspan="7" class="empty">No qualifying trades found.</td></tr>';
       $('strategyMessage').textContent = x.data_note || s.message;
+      strategyResultsLoaded = true;
     }
   } catch(e) { $('strategyMessage').textContent = 'Strategy status unavailable: ' + e.message; }
 }
 $('runStrategy').addEventListener('click', async () => {
+  strategyResultsLoaded = false;
   const b = $('runStrategy'); b.disabled = true; b.textContent = 'Starting…';
   try {
     const response = await fetch('/api/backtest/strategy/run',{method:'POST',credentials:'same-origin'});
@@ -413,17 +418,20 @@ async function refreshStrategyV2Status() {
     $('strategyV2Message').textContent=s.message||s.status;
     $('runStrategyV2').disabled=s.status==='running'||s.status==='calculating';
     $('runStrategyV2').textContent=$('runStrategyV2').disabled?'Calculating…':'Run IVF V2 Backtest';
-    if(s.status==='complete'){
+    if(s.status==='running'||s.status==='calculating') strategyV2ResultsLoaded=false;
+    if(s.status==='complete'&&!strategyV2ResultsLoaded){
       const r=await api('/api/backtest/strategy/v2/results'),x=r.summary||{};
       $('v2Trades').textContent=fmt(x.total_trades||0,0); $('v2WinRate').textContent=fmt(x.win_rate_pct||0,1)+'%';
       $('v2Gross').textContent=money(x.gross_pnl); $('v2Brokerage').textContent=money(x.brokerage_total);
       $('v2Net').textContent=money(x.net_pnl); $('v2DD').textContent=money(x.max_drawdown);
       $('strategyV2Trades').innerHTML=(r.trades||[]).map(t=>'<tr><td>'+esc(t.date)+'<br>'+esc(t.symbol)+'</td><td>'+fmt(t.entry,2)+'<br>'+t.entry_time+'</td><td>'+fmt(t.stop,2)+'<br>'+fmt(t.stop_pct,2)+'%</td><td>'+fmt(t.exit,2)+'<br>'+t.exit_time+'</td><td>'+fmt(t.qty,0)+'</td><td>'+fmt(t.ivf_multiple,2)+'×</td><td>'+money(t.net_pnl)+'</td><td>'+esc(t.exit_reason)+'</td></tr>').join('')||'<tr><td colspan="8" class="empty">No qualifying IVF V2 trades found.</td></tr>';
       $('strategyV2Message').textContent=x.data_note||s.message;
+       strategyV2ResultsLoaded=true;
     }
   }catch(e){$('strategyV2Message').textContent='IVF V2 status unavailable: '+e.message;}
 }
 $('runStrategyV2').addEventListener('click',async()=>{
+  strategyV2ResultsLoaded=false;
   const b=$('runStrategyV2');b.disabled=true;b.textContent='Starting…';
   try{const response=await fetch('/api/backtest/strategy/v2/run',{method:'POST',credentials:'same-origin'});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not start IVF V2');$('strategyV2Message').textContent=data.message||'IVF V2 started.';await refreshStrategyV2Status();}
   catch(e){$('strategyV2Message').textContent=e.message;b.disabled=false;b.textContent='Run IVF V2 Backtest';}

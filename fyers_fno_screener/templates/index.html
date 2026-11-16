@@ -119,7 +119,7 @@
     <p id="btMessage" class="backtest-message">No historical data has been collected for backtesting yet. Starting this job will not change the live scanner.</p>
     <div class="panel-head" style="margin-top:16px">
       <div><h2>Strategy validation</h2><p>₹2,50,000 per trade · ₹137 brokerage deducted per completed trade</p></div>
-      <button id="runStrategy" class="connect" type="button">Run Strategy Backtest</button>
+      <div class="backtest-actions"><a class="connect" href="/api/backtest/strategy/download">Save JSON</a><button id="runStrategy" class="connect" type="button">Run Strategy Backtest</button></div>
     </div>
     <p id="strategyMessage" class="backtest-message">Waiting to run the strategy on collected historical data.</p>
     <div class="backtest-grid" id="strategySummary">
@@ -136,7 +136,7 @@
   </section>
   <section class="panel backtest-panel" id="ivfV2Panel">
     <div class="panel-head"><div><h2>IVF Version 2 Backtest</h2><p>9:25 IVF ≥3× same-slot 20-session average · PDH mandatory · ₹2,50,000 per trade</p></div>
-      <button id="runStrategyV2" class="connect" type="button">Run IVF V2 Backtest</button></div>
+      <div class="backtest-actions"><a class="connect" href="/api/backtest/strategy/v2/download">Save JSON</a><button id="runStrategyV2" class="connect" type="button">Run IVF V2 Backtest</button></div></div>
     <p id="strategyV2Message" class="backtest-message">Separate from V1. Uses the existing stored historical candles.</p>
     <div class="backtest-grid">
       <div><span>Total trades</span><strong id="v2Trades">—</strong></div>

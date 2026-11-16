@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, redirect, request, session, url_for
+from flask import Flask, Response, jsonify, render_template, redirect, request, session, url_for
 
 load_dotenv()
 
@@ -212,6 +212,49 @@ def _history_db_connect():
     return connection
 
 
+def _persist_backtest_result(strategy_key, state):
+    """Store completed backtest output as JSON inside the persistent history database."""
+    payload = {
+        'status': state.get('status'),
+        'message': state.get('message'),
+        'trade_count': state.get('trade_count', 0),
+        'trades': state.get('trades', []),
+        'summary': state.get('summary', {}),
+        'updated_at': state.get('updated_at'),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+    saved_at = datetime.now(IST).isoformat()
+    with history_db_lock:
+        with _history_db_connect() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO backtest_results(strategy_key,payload_json,updated_at) VALUES(?,?,?)",
+                (strategy_key, encoded, saved_at)
+            )
+
+
+def _restore_backtest_result(strategy_key, target_state, target_lock):
+    """Restore the last successful result after a Render process restart."""
+    try:
+        with history_db_lock:
+            with _history_db_connect() as db:
+                row = db.execute(
+                    "SELECT payload_json FROM backtest_results WHERE strategy_key=?",
+                    (strategy_key,)
+                ).fetchone()
+        if not row:
+            return
+        payload = json.loads(row[0])
+        if payload.get('status') != 'complete':
+            return
+        with target_lock:
+            target_state.update(payload)
+            target_state['message'] = 'Loaded saved results from persistent storage.'
+        app.logger.info('Restored %s backtest result (%s trades).',
+                        strategy_key, payload.get('trade_count', 0))
+    except Exception as exc:
+        app.logger.warning('Could not restore %s backtest result: %s', strategy_key, exc)
+
+
 def summarize_daily_candles(candles, today=None):
     """Keep only previous-session high and rolling 52-week high in RAM."""
     today = today or datetime.now(IST).date()
@@ -275,6 +318,13 @@ def init_history_store():
                 CREATE TABLE IF NOT EXISTS app_meta (
                     meta_key TEXT PRIMARY KEY,
                     meta_value TEXT NOT NULL
+                )
+            """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS backtest_results (
+                    strategy_key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 )
             """)
             db.execute("""
@@ -2294,8 +2344,13 @@ def _strategy_compute():
                 symbols = [r[0] for r in db.execute(
                     "SELECT DISTINCT symbol FROM backtest_candles WHERE timeframe='5' ORDER BY symbol"
                 ).fetchall()]
-                all_data = {}
-                for symbol in symbols:
+
+        trades = []
+        excluded = {'missing_reference': 0, 'missing_daily_history': 0, 'insufficient_volume_history': 0}
+        # Load and process one symbol at a time to keep peak RAM bounded.
+        for symbol in symbols:
+            with history_db_lock:
+                with _history_db_connect() as db:
                     intraday_rows = db.execute(
                         "SELECT session_date,candles_json FROM backtest_candles WHERE symbol=? AND timeframe='5' ORDER BY session_date",
                         (symbol,)
@@ -2304,11 +2359,6 @@ def _strategy_compute():
                         "SELECT session_date,candles_json FROM backtest_candles WHERE symbol=? AND timeframe='D' ORDER BY session_date",
                         (symbol,)
                     ).fetchall()
-                    all_data[symbol] = (intraday_rows, daily_rows)
-
-        trades = []
-        excluded = {'missing_reference': 0, 'missing_daily_history': 0, 'insufficient_volume_history': 0}
-        for symbol, (intraday_rows, daily_rows) in all_data.items():
             daily = {}
             for session_date, raw in daily_rows:
                 try:
@@ -2481,6 +2531,8 @@ def _strategy_compute():
         with strategy_lock:
             strategy_state.update({'status':'complete','message':'Strategy validation complete.','trade_count':len(trades),
                                    'trades':trades,'summary':summary,'updated_at':datetime.now(IST).isoformat()})
+            saved_state = dict(strategy_state)
+        _persist_backtest_result('v1', saved_state)
     except Exception as exc:
         app.logger.exception('Strategy validation failed: %s', exc)
         with strategy_lock:
@@ -2501,6 +2553,18 @@ def backtest_strategy_results():
     with strategy_lock:
         return jsonify({'status':strategy_state.get('status'), 'summary':strategy_state.get('summary',{}),
                         'trades':strategy_state.get('trades',[])})
+
+
+@app.route('/api/backtest/strategy/download')
+def backtest_strategy_download():
+    with strategy_lock:
+        payload = {'status': strategy_state.get('status'), 'summary': strategy_state.get('summary', {}),
+                   'trades': strategy_state.get('trades', []), 'updated_at': strategy_state.get('updated_at')}
+    if payload['status'] != 'complete':
+        return jsonify({'error': 'No completed V1 result is currently available.'}), 409
+    return Response(json.dumps(payload, ensure_ascii=False, indent=2),
+                    mimetype='application/json',
+                    headers={'Content-Disposition': 'attachment; filename="strategy_v1_results.json"'})
 
 
 @app.route('/api/backtest/strategy/run', methods=['POST'])
@@ -2530,6 +2594,11 @@ strategy_v2_worker_running = False
 strategy_v2_state = {'status':'not_run','message':'IVF Version 2 has not been run.','trade_count':0,'trades':[],'summary':{}}
 
 
+# Restore the latest successful runs from the persistent /var/data history database.
+_restore_backtest_result('v1', strategy_state, strategy_lock)
+_restore_backtest_result('v2', strategy_v2_state, strategy_v2_lock)
+
+
 def _strategy_v2_compute():
     global strategy_v2_worker_running
     with strategy_v2_lock:
@@ -2538,14 +2607,14 @@ def _strategy_v2_compute():
         with history_db_lock:
             with _history_db_connect() as db:
                 symbols=[r[0] for r in db.execute("SELECT DISTINCT symbol FROM backtest_candles WHERE timeframe='5' ORDER BY symbol").fetchall()]
-                data={}
-                for symbol in symbols:
-                    ir=db.execute("SELECT session_date,candles_json FROM backtest_candles WHERE symbol=? AND timeframe='5' ORDER BY session_date",(symbol,)).fetchall()
-                    dr=db.execute("SELECT session_date,candles_json FROM backtest_candles WHERE symbol=? AND timeframe='D' ORDER BY session_date",(symbol,)).fetchall()
-                    data[symbol]=(ir,dr)
         trades=[]
         excluded={'missing_0920_or_0925':0,'insufficient_20_slot_history':0,'pdh_not_broken':0,'no_0925_breakout':0,'invalid_or_over_2pct_stop':0}
-        for symbol,(intraday_rows,daily_rows) in data.items():
+        # Load and process one symbol at a time to keep peak RAM bounded.
+        for symbol in symbols:
+            with history_db_lock:
+                with _history_db_connect() as db:
+                    intraday_rows=db.execute("SELECT session_date,candles_json FROM backtest_candles WHERE symbol=? AND timeframe='5' ORDER BY session_date",(symbol,)).fetchall()
+                    daily_rows=db.execute("SELECT session_date,candles_json FROM backtest_candles WHERE symbol=? AND timeframe='D' ORDER BY session_date",(symbol,)).fetchall()
             daily={}
             for d,raw in daily_rows:
                 try:
@@ -2629,6 +2698,8 @@ def _strategy_v2_compute():
             'data_note':'IVF = 09:25 candle volume / average 09:25 candle volume over prior 20 sessions; ≥3×. PDH mandatory. Entry trigger is 09:20 high when 09:25 candle breaks it; fill is max(trigger, 09:25 open). Stop is 09:25 low; stop checks begin on the next 5-minute candle because intrabar order is unknown. Trades with stop distance >2% or invalid stop are skipped. Exit at stop or last close at/before 15:00. One trade per stock/day. ₹2,50,000 notional; flat ₹137 brokerage. Other charges and slippage excluded.'}
         with strategy_v2_lock:
             strategy_v2_state.update({'status':'complete','message':'IVF Version 2 backtest complete.','trade_count':len(trades),'trades':trades,'summary':summary,'updated_at':datetime.now(IST).isoformat()})
+            saved_state = dict(strategy_v2_state)
+        _persist_backtest_result('v2', saved_state)
     except Exception as exc:
         app.logger.exception('IVF V2 failed: %s',exc)
         with strategy_v2_lock: strategy_v2_state.update({'status':'error','message':'IVF V2 failed. Check server logs.','error':str(exc)})
@@ -2644,6 +2715,18 @@ def backtest_strategy_v2_status():
 @app.route('/api/backtest/strategy/v2/results')
 def backtest_strategy_v2_results():
     with strategy_v2_lock: return jsonify({'status':strategy_v2_state.get('status'),'summary':strategy_v2_state.get('summary',{}),'trades':strategy_v2_state.get('trades',[])})
+
+
+@app.route('/api/backtest/strategy/v2/download')
+def backtest_strategy_v2_download():
+    with strategy_v2_lock:
+        payload = {'status': strategy_v2_state.get('status'), 'summary': strategy_v2_state.get('summary', {}),
+                   'trades': strategy_v2_state.get('trades', []), 'updated_at': strategy_v2_state.get('updated_at')}
+    if payload['status'] != 'complete':
+        return jsonify({'error': 'No completed IVF V2 result is currently available.'}), 409
+    return Response(json.dumps(payload, ensure_ascii=False, indent=2),
+                    mimetype='application/json',
+                    headers={'Content-Disposition': 'attachment; filename="ivf_v2_results.json"'})
 
 
 @app.route('/api/backtest/strategy/v2/run',methods=['POST'])
