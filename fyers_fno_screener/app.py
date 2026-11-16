@@ -1847,6 +1847,7 @@ def ivf_volume_spike_scan():
     missing_today = 0
     missing_pdh_or_previous_close = 0
     insufficient_baseline = 0
+    target_timestamp_for_scan = int(datetime.combine(target, datetime.min.time(), tzinfo=IST).timestamp()) + (9 * 3600) + (15 * 60)
     for symbol, raw in five_rows:
         try:
             candles = json.loads(raw)
@@ -1895,7 +1896,8 @@ def ivf_volume_spike_scan():
 
             # For every candle today, compare volume with the preceding 100
             # completed 5-minute candles, including prior-day candles.
-            all_prior_volumes = []
+            all_prior_volumes = [bar[5] for bar in parsed
+                                 if datetime.fromtimestamp(bar[0], IST).date() < target]
             spikes = []
             for bar in parsed:
                 stamp, opn, high, low, close, volume = bar
@@ -1917,6 +1919,9 @@ def ivf_volume_spike_scan():
                                            else 'strong' if multiple >= 5.0 else 'spike'),
                             })
                 all_prior_volumes.append(volume)
+
+            if len(parsed) and len([bar for bar in parsed if bar[0] < target_timestamp_for_scan]) < 100:
+                insufficient_baseline += 1
 
             if spikes:
                 stocks.append({
