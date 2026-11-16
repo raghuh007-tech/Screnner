@@ -2266,5 +2266,260 @@ def backtest_start():
 
 
 
+# --------------------------- Strategy validation V1 ---------------------------
+BACKTEST_CAPITAL = 250000.0
+BACKTEST_BROKERAGE = 137.0  # User-specified flat brokerage/cost per completed trade.
+strategy_lock = threading.RLock()
+strategy_worker_running = False
+strategy_state = {
+    'status': 'not_run',
+    'message': 'Strategy validation has not been run.',
+    'trade_count': 0,
+    'trades': [],
+    'summary': {},
+}
+
+
+def _bt_candle_time(candle):
+    return datetime.fromtimestamp(int(candle[0]), IST)
+
+
+def _strategy_compute():
+    """Run the agreed PDH + rolling 52-week + 3x same-time volume setup on stored 5m data."""
+    global strategy_worker_running
+    _backtest_update_state(strategy_status='calculating')
+    try:
+        with history_db_lock:
+            with _history_db_connect() as db:
+                symbols = [r[0] for r in db.execute(
+                    "SELECT DISTINCT symbol FROM backtest_candles WHERE timeframe='5' ORDER BY symbol"
+                ).fetchall()]
+                all_data = {}
+                for symbol in symbols:
+                    intraday_rows = db.execute(
+                        "SELECT session_date,candles_json FROM backtest_candles WHERE symbol=? AND timeframe='5' ORDER BY session_date",
+                        (symbol,)
+                    ).fetchall()
+                    daily_rows = db.execute(
+                        "SELECT session_date,candles_json FROM backtest_candles WHERE symbol=? AND timeframe='D' ORDER BY session_date",
+                        (symbol,)
+                    ).fetchall()
+                    all_data[symbol] = (intraday_rows, daily_rows)
+
+        trades = []
+        excluded = {'missing_reference': 0, 'missing_daily_history': 0, 'insufficient_volume_history': 0}
+        for symbol, (intraday_rows, daily_rows) in all_data.items():
+            daily = {}
+            for session_date, raw in daily_rows:
+                try:
+                    parsed = json.loads(raw)
+                    if parsed:
+                        daily[session_date] = parsed[-1]
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+            daily_dates = sorted(daily)
+            prior_day_high = {}
+            rolling_high = {}
+            for i, d in enumerate(daily_dates):
+                if i > 0:
+                    prior_day_high[d] = float(daily[daily_dates[i-1]][2])
+                window = daily_dates[max(0, i-252):i]
+                rolling_high[d] = max((float(daily[x][2]) for x in window), default=None)
+
+            sessions = {}
+            for session_date, raw in intraday_rows:
+                try:
+                    candles = json.loads(raw)
+                    candles = sorted((c for c in candles if isinstance(c, list) and len(c) >= 6), key=lambda c: int(c[0]))
+                    if candles:
+                        sessions[session_date] = candles
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+
+            # Cache cumulative volume at each 5-minute slot for the prior 20 sessions.
+            session_dates = sorted(sessions)
+            for day_index, trade_date in enumerate(session_dates):
+                if trade_date not in prior_day_high or rolling_high.get(trade_date) is None:
+                    excluded['missing_daily_history'] += 1
+                    continue
+                candles = sessions[trade_date]
+                ref_index = None
+                for i, c in enumerate(candles):
+                    t = _bt_candle_time(c)
+                    if t.hour == 9 and t.minute == 15:
+                        ref_index = i
+                        break
+                if ref_index is None:
+                    excluded['missing_reference'] += 1
+                    continue
+                ref = candles[ref_index]
+                ref_high, ref_low = float(ref[2]), float(ref[3])
+                pdh = prior_day_high[trade_date]
+                week_high = rolling_high[trade_date]
+                if not (week_high > 0 and ref_high >= 0):
+                    continue
+
+                previous_sessions = [sessions[d] for d in session_dates[max(0, day_index-20):day_index]]
+                if len(previous_sessions) < 20:
+                    excluded['insufficient_volume_history'] += 1
+                    continue
+
+                entry_index = None
+                entry_price = None
+                for i in range(ref_index + 1, len(candles)):
+                    c = candles[i]
+                    t = _bt_candle_time(c)
+                    if (t.hour, t.minute) >= (15, 0):
+                        break
+                    high = float(c[2])
+                    if high > ref_high:
+                        entry_index = i
+                        entry_price = max(ref_high, float(c[1]))
+                        break
+                if entry_index is None or entry_price <= 0:
+                    continue
+
+                # Confirm PDH and 52-week-high proximity at the time of entry.
+                if entry_price <= pdh:
+                    continue
+                if (week_high - entry_price) / week_high > 0.05:
+                    continue
+
+                entry_candle = candles[entry_index]
+                entry_time = _bt_candle_time(entry_candle)
+                slot = entry_index - ref_index
+                prior_cum = []
+                for old in previous_sessions:
+                    cum = 0.0
+                    seen = 0
+                    for old_c in old:
+                        old_t = _bt_candle_time(old_c)
+                        if (old_t.hour, old_t.minute) < (9, 15):
+                            continue
+                        if (old_t.hour, old_t.minute) >= (entry_time.hour, entry_time.minute):
+                            break
+                        cum += float(old_c[5])
+                        seen += 1
+                    if seen >= slot:
+                        prior_cum.append(cum)
+                if len(prior_cum) < 20:
+                    excluded['insufficient_volume_history'] += 1
+                    continue
+                current_cum = sum(float(c[5]) for c in candles[ref_index:entry_index+1])
+                avg_cum = sum(prior_cum) / len(prior_cum)
+                if avg_cum <= 0 or current_cum < 3.0 * avg_cum:
+                    continue
+
+                qty = int(BACKTEST_CAPITAL // entry_price)
+                if qty <= 0:
+                    continue
+                stop = ref_low
+                exit_price = None
+                exit_time = None
+                exit_reason = '3:00 PM'
+                # Conservative treatment: if the entry candle also reaches the stop,
+                # assume the stop was hit after entry.
+                if float(entry_candle[3]) <= stop:
+                    exit_price = stop
+                    exit_time = entry_time
+                    exit_reason = 'Stop loss (same-candle conservative)'
+                else:
+                    for c in candles[entry_index+1:]:
+                        t = _bt_candle_time(c)
+                        if (t.hour, t.minute) >= (15, 0):
+                            break
+                        if float(c[3]) <= stop:
+                            exit_price = stop
+                            exit_time = t
+                            exit_reason = 'Stop loss'
+                            break
+                if exit_price is None:
+                    eligible = [c for c in candles if ( _bt_candle_time(c).hour, _bt_candle_time(c).minute) <= (15, 0)]
+                    if not eligible:
+                        continue
+                    last = eligible[-1]
+                    exit_price = float(last[4])
+                    exit_time = _bt_candle_time(last)
+                gross = (exit_price - entry_price) * qty
+                net = gross - BACKTEST_BROKERAGE
+                trades.append({
+                    'date': trade_date, 'symbol': symbol.split(':')[-1].replace('-EQ',''),
+                    'entry_time': entry_time.strftime('%H:%M'), 'entry': round(entry_price,2),
+                    'stop': round(stop,2), 'exit_time': exit_time.strftime('%H:%M'),
+                    'exit': round(exit_price,2), 'qty': qty, 'exit_reason': exit_reason,
+                    'gross_pnl': round(gross,2), 'brokerage': BACKTEST_BROKERAGE,
+                    'net_pnl': round(net,2), 'volume_multiple': round(current_cum/avg_cum,2),
+                    'week52_high': round(week_high,2)
+                })
+
+        trades.sort(key=lambda x: (x['date'], x['entry_time'], x['symbol']))
+        wins = [t for t in trades if t['net_pnl'] > 0]
+        losses = [t for t in trades if t['net_pnl'] <= 0]
+        gross_total = sum(t['gross_pnl'] for t in trades)
+        net_total = sum(t['net_pnl'] for t in trades)
+        gross_profit = sum(t['gross_pnl'] for t in trades if t['gross_pnl'] > 0)
+        gross_loss = abs(sum(t['gross_pnl'] for t in trades if t['gross_pnl'] < 0))
+        equity = peak = max_dd = 0.0
+        for t in trades:
+            equity += t['net_pnl']
+            peak = max(peak, equity)
+            max_dd = max(max_dd, peak-equity)
+        summary = {
+            'total_trades': len(trades), 'winning_trades': len(wins), 'losing_trades': len(losses),
+            'win_rate_pct': round(len(wins)/len(trades)*100,2) if trades else 0,
+            'gross_pnl': round(gross_total,2), 'brokerage_total': round(len(trades)*BACKTEST_BROKERAGE,2),
+            'net_pnl': round(net_total,2), 'profit_factor': round(gross_profit/gross_loss,2) if gross_loss else None,
+            'max_drawdown': round(max_dd,2),
+            'avg_net_per_trade': round(net_total/len(trades),2) if trades else 0,
+            'capital_per_trade': BACKTEST_CAPITAL, 'brokerage_per_trade': BACKTEST_BROKERAGE,
+            'excluded_days': excluded,
+            'data_note': '5-minute OHLCV only. Same-candle stop is treated conservatively. Flat ₹137 per completed trade is deducted; other statutory charges and slippage are not included.'
+        }
+        with strategy_lock:
+            strategy_state.update({'status':'complete','message':'Strategy validation complete.','trade_count':len(trades),
+                                   'trades':trades,'summary':summary,'updated_at':datetime.now(IST).isoformat()})
+    except Exception as exc:
+        app.logger.exception('Strategy validation failed: %s', exc)
+        with strategy_lock:
+            strategy_state.update({'status':'error','message':'Strategy validation failed. Check server logs.','error':str(exc)})
+    finally:
+        with strategy_lock:
+            strategy_worker_running = False
+
+
+@app.route('/api/backtest/strategy/status')
+def backtest_strategy_status():
+    with strategy_lock:
+        return jsonify({k:v for k,v in strategy_state.items() if k != 'trades'})
+
+
+@app.route('/api/backtest/strategy/results')
+def backtest_strategy_results():
+    with strategy_lock:
+        return jsonify({'status':strategy_state.get('status'), 'summary':strategy_state.get('summary',{}),
+                        'trades':strategy_state.get('trades',[])})
+
+
+@app.route('/api/backtest/strategy/run', methods=['POST'])
+def backtest_strategy_run():
+    global strategy_worker_running
+    with history_db_lock:
+        with _history_db_connect() as db:
+            errors = db.execute("SELECT COUNT(*) FROM backtest_errors").fetchone()[0]
+            five = db.execute("SELECT COUNT(DISTINCT symbol) FROM backtest_candles WHERE timeframe='5'").fetchone()[0]
+            daily = db.execute("SELECT COUNT(DISTINCT symbol) FROM backtest_candles WHERE timeframe='D'").fetchone()[0]
+    if errors:
+        return jsonify({'error':f'{errors} historical data errors remain. Resolve them before strategy validation.'}), 409
+    if five == 0 or daily == 0:
+        return jsonify({'error':'Historical 5-minute and daily data are required.'}), 409
+    with strategy_lock:
+        if strategy_worker_running:
+            return jsonify({'ok':True,'message':'Strategy validation is already running.'})
+        strategy_worker_running = True
+        strategy_state.update({'status':'running','message':'Calculating trades across stored historical candles.'})
+    threading.Thread(target=_strategy_compute, name='backtest-strategy-worker', daemon=True).start()
+    return jsonify({'ok':True,'message':'Strategy validation started.'})
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', '8000')), debug=False)
