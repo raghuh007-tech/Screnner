@@ -28,8 +28,6 @@
       <a class="connect" href="/connect-fyers">Connect FYERS</a>
       <button id="testFyersData" class="connect" type="button">Test FYERS Data</button>
       <span id="fyersDataTest" class="status offline" aria-live="polite">Data test: not run</span>
-      <button id="runFyersDiagnostic" class="connect" type="button">Run F&amp;O Diagnostic</button>
-      <span id="fyersDiagnosticResult" class="status offline" aria-live="polite">F&amp;O diagnostic: not run</span>
       {% endif %}
       <form method="post" action="/logout"><button class="logout" type="submit">Lock</button></form>
     </div>
@@ -169,6 +167,6 @@
 <div class="chart-timeframes"><button data-tf="1" type="button">1m</button><button class="active" data-tf="5" type="button">5m</button><button data-tf="15" type="button">15m</button><button data-tf="60" type="button">1h</button></div>
 <div id="stockChart" class="stock-chart"></div><div id="chartMessage" class="chart-message">Loading candles and volume…</div>
 </section></div>
-<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=18"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=17"></script>
 </body>
 </html>
