@@ -1598,7 +1598,7 @@ def fyers_test_status():
 
 @app.route('/api/fyers-test-data', methods=['POST'])
 def fyers_test_data():
-    """Test FYERS quote and candle access using the separately stored test token."""
+    """Run a small, sequential FYERS quote and 5-minute history smoke test."""
     try:
         with history_db_lock:
             with _history_db_connect() as db:
@@ -1612,62 +1612,77 @@ def fyers_test_data():
             'Authorization': f'{FYERS_APP_ID}:{row[0]}',
             'Content-Type': 'application/json',
         }
-        result = {'quote': {'ok': False}, 'history': {'ok': False}}
+        symbols = [
+            'NSE:RELIANCE-EQ',
+            'NSE:HDFCBANK-EQ',
+            'NSE:ICICIBANK-EQ',
+            'NSE:INFY-EQ',
+            'NSE:SBIN-EQ',
+        ]
+        result = {'quotes': [], 'history': []}
         quote_response = requests.get(
             FYERS_DATA_ROOT + '/quotes',
             headers=headers,
-            params={'symbols': 'NSE:SBIN-EQ'},
+            params={'symbols': ','.join(symbols)},
             timeout=20,
         )
         quote_data = quote_response.json()
-        quote_item = next((item for item in quote_data.get('d', [])
-                           if item.get('n') == 'NSE:SBIN-EQ' and item.get('s') == 'ok'), None)
-        quote_values = (quote_item or {}).get('v') or {}
-        if quote_response.ok and quote_values.get('lp') is not None:
-            result['quote'] = {
-                'ok': True,
-                'symbol': 'NSE:SBIN-EQ',
-                'ltp': quote_values.get('lp'),
-                'change_pct': quote_values.get('chp'),
-            }
-        else:
-            result['quote'] = {
-                'ok': False,
-                'message': (quote_data.get('message') or 'Quote permission or symbol validation failed.')[:180],
-            }
+        quote_items = {
+            item.get('n'): item.get('v') or {}
+            for item in quote_data.get('d', [])
+            if item.get('s') == 'ok'
+        }
+        for symbol in symbols:
+            values = quote_items.get(symbol) or {}
+            result['quotes'].append({
+                'symbol': symbol,
+                'ok': bool(quote_response.ok and values.get('lp') is not None),
+                'ltp': values.get('lp'),
+                'change_pct': values.get('chp'),
+            })
 
         end_date = datetime.now(IST).date() - timedelta(days=1)
         start_date = end_date - timedelta(days=5)
-        history_response = requests.get(
-            FYERS_DATA_ROOT + '/history',
-            headers=headers,
-            params={
-                'symbol': 'NSE:SBIN-EQ',
-                'resolution': '5',
-                'date_format': '1',
-                'range_from': start_date.isoformat(),
-                'range_to': end_date.isoformat(),
-                'cont_flag': '0',
-            },
-            timeout=25,
+        for symbol in symbols:
+            try:
+                history_response = requests.get(
+                    FYERS_DATA_ROOT + '/history',
+                    headers=headers,
+                    params={
+                        'symbol': symbol,
+                        'resolution': '5',
+                        'date_format': '1',
+                        'range_from': start_date.isoformat(),
+                        'range_to': end_date.isoformat(),
+                        'cont_flag': '0',
+                    },
+                    timeout=20,
+                )
+                history_data = history_response.json()
+                candles = history_data.get('candles') or []
+                history_ok = bool(
+                    history_response.ok and history_data.get('s') == 'ok' and candles
+                )
+                result['history'].append({
+                    'symbol': symbol,
+                    'ok': history_ok,
+                    'candles': len(candles) if history_ok else 0,
+                })
+            except Exception:
+                result['history'].append({
+                    'symbol': symbol, 'ok': False, 'candles': 0,
+                })
+
+        result['quote_passed'] = sum(1 for item in result['quotes'] if item['ok'])
+        result['history_passed'] = sum(1 for item in result['history'] if item['ok'])
+        result['ok'] = (
+            result['quote_passed'] == len(symbols)
+            and result['history_passed'] == len(symbols)
         )
-        history_data = history_response.json()
-        candles = history_data.get('candles') or []
-        if history_response.ok and history_data.get('s') == 'ok' and candles:
-            result['history'] = {
-                'ok': True,
-                'symbol': 'NSE:SBIN-EQ',
-                'candles': len(candles),
-                'from': start_date.isoformat(),
-                'to': end_date.isoformat(),
-            }
-        else:
-            result['history'] = {
-                'ok': False,
-                'message': (history_data.get('message') or 'Historical data permission or request validation failed.')[:180],
-            }
-        result['ok'] = result['quote']['ok'] and result['history']['ok']
-        result['message'] = 'Both FYERS market-data tests passed.' if result['ok'] else 'One or more FYERS market-data tests failed.'
+        result['message'] = (
+            'All five FYERS quote and history checks passed.'
+            if result['ok'] else 'Some FYERS symbol checks failed; see per-symbol results.'
+        )
         return jsonify(result)
     except Exception as exc:
         app.logger.warning('FYERS test-data check failed: %s', exc)
