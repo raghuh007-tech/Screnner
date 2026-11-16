@@ -914,7 +914,7 @@ def market_context():
         quotes = dict(cache.get('market_quotes', {}))
         labels = dict(cache.get('sector_index_labels', {}))
     nifty = next((quote for symbol, quote in quotes.items()
-                  if symbol.startswith('NSE:') and symbol.endswith('-INDEX')
+                  if symbol.startswith('NSE:')
                   and symbol.removeprefix('NSE:').removesuffix('-INDEX').replace(' ', '').upper() == 'NIFTY50'), None)
     nifty_data = {
         'price': nifty.get('lp') if nifty else None,
