@@ -2221,6 +2221,30 @@ def backtest_start():
         today = datetime.now(IST).date()
         trade_end = today - timedelta(days=1)
         trade_start = trade_end - timedelta(days=BACKTEST_DAYS - 1)
+
+        # Remove obsolete failures from older collection windows (for example,
+        # FYERS 401 errors) before resuming the current provider's collection.
+        # This only prunes error metadata; saved candle and completed-chunk data
+        # are never deleted.
+        daily_start = trade_start - timedelta(days=366)
+        with history_db_lock:
+            with _history_db_connect() as db:
+                cursor = db.execute("""
+                    DELETE FROM backtest_errors
+                    WHERE (timeframe='5' AND NOT (range_from >= ? AND range_to <= ?))
+                       OR (timeframe='D' AND NOT (range_from >= ? AND range_to <= ?))
+                       OR timeframe NOT IN ('5', 'D')
+                """, (
+                    trade_start.isoformat(), trade_end.isoformat(),
+                    daily_start.isoformat(), trade_end.isoformat()
+                ))
+                stale_errors_removed = cursor.rowcount
+        if stale_errors_removed:
+            app.logger.info(
+                'Removed %d obsolete backtest errors outside the current collection window.',
+                stale_errors_removed
+            )
+
         worker = threading.Thread(
             target=_backtest_worker, args=(symbols, trade_start, trade_end),
             name='backtest-history-worker', daemon=True
