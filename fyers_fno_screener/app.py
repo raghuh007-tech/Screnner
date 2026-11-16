@@ -1674,6 +1674,109 @@ def fyers_test_data():
         return jsonify({'ok': False, 'message': 'FYERS test failed. Check server logs for details.'}), 502
 
 
+@app.route('/api/fyers-diagnostic', methods=['POST'])
+def fyers_fno_diagnostic():
+    """Read-only coverage test for FYERS F&O cash underlyings using the separate test token."""
+    try:
+        with history_db_lock:
+            with _history_db_connect() as db:
+                token_row = db.execute(
+                    "SELECT meta_value FROM app_meta WHERE meta_key = 'fyers_test_access_token'"
+                ).fetchone()
+        if not token_row or not token_row[0]:
+            return jsonify({'ok': False, 'message': 'Connect FYERS first using the separate test connection.'}), 400
+
+        headers = {'Authorization': f'{FYERS_APP_ID}:{token_row[0]}', 'Content-Type': 'application/json'}
+        fo_response = requests.get('https://public.fyers.in/sym_details/NSE_FO.csv', timeout=30)
+        fo_response.raise_for_status()
+        cm_response = requests.get('https://public.fyers.in/sym_details/NSE_CM.csv', timeout=30)
+        cm_response.raise_for_status()
+        fo_rows = list(csv.reader(io.StringIO(fo_response.text)))
+        cm_rows = list(csv.reader(io.StringIO(cm_response.text)))
+        if not fo_rows or not cm_rows:
+            return jsonify({'ok': False, 'message': 'FYERS instrument master returned empty data.'}), 502
+
+        fo_header = [cell.strip().lower() for cell in fo_rows[0]]
+        cm_header = [cell.strip().lower() for cell in cm_rows[0]]
+        fo_has_header = any('underlying symbol' in cell for cell in fo_header)
+        cm_has_header = any('symbol ticker' in cell for cell in cm_header)
+        fo_data = fo_rows[1:] if fo_has_header else fo_rows
+        cm_data = cm_rows[1:] if cm_has_header else cm_rows
+        underlying_idx = next((i for i, h in enumerate(fo_header) if 'underlying symbol' in h), 13) if fo_has_header else 13
+        ticker_idx = next((i for i, h in enumerate(cm_header) if 'symbol ticker' in h), 9) if cm_has_header else 9
+        cash_symbols = {
+            row[ticker_idx].strip().upper() for row in cm_data
+            if len(row) > ticker_idx and row[ticker_idx].strip().upper().startswith('NSE:')
+            and row[ticker_idx].strip().upper().endswith('-EQ')
+        }
+        universe = sorted({
+            _normalise_symbol(row[underlying_idx].strip())
+            for row in fo_data if len(row) > underlying_idx
+            and row[underlying_idx].strip().upper() not in INDEX_NAMES
+            and _normalise_symbol(row[underlying_idx].strip()) in cash_symbols
+        })
+        if not universe:
+            return jsonify({'ok': False, 'message': 'No NSE F&O cash underlyings matched the FYERS cash master. Check instrument-master columns.'}), 502
+
+        quote_ok, quote_failed, missing = [], [], []
+        for offset in range(0, len(universe), 50):
+            batch = universe[offset:offset + 50]
+            response = requests.get(
+                FYERS_DATA_ROOT + '/quotes', headers=headers,
+                params={'symbols': ','.join(batch)}, timeout=25
+            )
+            data = response.json()
+            if not response.ok or data.get('s') != 'ok':
+                quote_failed.append({'batch': offset // 50 + 1, 'message': (data.get('message') or 'Quote batch failed')[:160]})
+                continue
+            returned = {
+                item.get('n'): item for item in (data.get('d') or [])
+                if item.get('s') == 'ok' and (item.get('v') or {}).get('lp') is not None
+            }
+            quote_ok.extend(symbol for symbol in batch if symbol in returned)
+            missing.extend(symbol for symbol in batch if symbol not in returned)
+
+        sample_names = ['RELIANCE', 'HDFCBANK', 'INFY', 'SBIN', 'TCS']
+        history_samples = []
+        end_date = datetime.now(IST).date() - timedelta(days=1)
+        start_date = end_date - timedelta(days=5)
+        universe_set = set(universe)
+        for name in sample_names:
+            symbol = _normalise_symbol(name)
+            if symbol not in universe_set:
+                history_samples.append({'symbol': symbol, 'ok': False, 'message': 'Not present in matched F&O universe'})
+                continue
+            response = requests.get(
+                FYERS_DATA_ROOT + '/history', headers=headers,
+                params={'symbol': symbol, 'resolution': '5', 'date_format': '1',
+                        'range_from': start_date.isoformat(), 'range_to': end_date.isoformat(),
+                        'cont_flag': '0'}, timeout=25
+            )
+            data = response.json()
+            candles = data.get('candles') or []
+            history_samples.append({'symbol': symbol, 'ok': bool(response.ok and data.get('s') == 'ok' and candles),
+                                    'candles': len(candles),
+                                    'message': None if candles else (data.get('message') or 'No candles returned')[:160]})
+
+        return jsonify({
+            'ok': bool(quote_ok) and all(item['ok'] for item in history_samples if item['symbol'] in universe_set),
+            'universe_count': len(universe),
+            'cash_master_count': len(cash_symbols),
+            'quote_ok_count': len(quote_ok),
+            'quote_missing_count': len(missing),
+            'quote_failed_batches': quote_failed,
+            'missing_symbols': missing[:30],
+            'history_samples': history_samples,
+            'history_range': {'from': start_date.isoformat(), 'to': end_date.isoformat()},
+            'token_persisted': True,
+            'active_broker_unchanged': BROKER_PROVIDER,
+            'message': 'Read-only FYERS F&O market-data diagnostic completed.'
+        })
+    except Exception as exc:
+        app.logger.warning('FYERS F&O diagnostic failed: %s', exc)
+        return jsonify({'ok': False, 'message': 'FYERS F&O diagnostic failed. Check server logs for details.'}), 502
+
+
 @app.route('/api/status')
 def status():
     with lock:
