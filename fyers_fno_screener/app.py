@@ -1020,6 +1020,40 @@ def volume_ratio_for_time(candles, now=None):
     return average, cumulative[-1] if cumulative else None, len(cumulative)
 
 
+def intraday_volume_filter(candles, now=None):
+    """Compare the latest completed 5-minute candle with the same slot over 20 prior sessions."""
+    now = now or datetime.now(IST)
+    if not candles:
+        return None, None, 0, None
+    sessions = {}
+    for candle in candles:
+        if len(candle) < 6:
+            continue
+        try:
+            stamp = datetime.fromtimestamp(int(candle[0]), IST)
+            volume = float(candle[5] or 0)
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+        sessions.setdefault(stamp.date(), {})[stamp.hour * 60 + stamp.minute] = volume
+    current_day = sessions.get(now.date(), {})
+    completed = [
+        (minute, volume) for minute, volume in current_day.items()
+        if minute + 5 <= now.hour * 60 + now.minute
+    ]
+    if not completed:
+        return None, None, 0, None
+    slot_minute, current_volume = max(completed, key=lambda item: item[0])
+    prior_dates = sorted(day for day in sessions if day < now.date())[-20:]
+    if len(prior_dates) < 20:
+        return None, current_volume, len(prior_dates), slot_minute
+    samples = [sessions[day][slot_minute] for day in prior_dates if slot_minute in sessions[day]]
+    if len(samples) < 15:
+        return None, current_volume, len(samples), slot_minute
+    average = sum(samples) / len(samples)
+    ratio = current_volume / average if average > 0 else None
+    return ratio, current_volume, len(samples), slot_minute
+
+
 def classify_sentiment(change_pct):
     """Three daily-return bands for every NSE F&O stock."""
     if change_pct is None:
@@ -1222,6 +1256,7 @@ def build_scan_row(symbol, quote, now=None):
 
     avg_same_time, _, sessions = volume_ratio_for_time(intraday or [], now)
     volume_ratio = day_volume / avg_same_time if avg_same_time and avg_same_time > 0 else None
+    ivf_ratio, ivf_candle_volume, ivf_sessions, ivf_slot = intraday_volume_filter(intraday or [], now)
 
     prev_day_high = daily.get('prev_day_high') if isinstance(daily, dict) else None
     week52_high = daily.get('week52_high') if isinstance(daily, dict) else None
@@ -1235,6 +1270,7 @@ def build_scan_row(symbol, quote, now=None):
     gain_ok = change_pct is not None and change_pct >= 2.0
     week52_ok = week52_distance is not None and week52_distance <= 3.0
     week52_momentum_ok = week52_distance is not None and week52_distance <= 5.0 and gain_ok and volume_ok
+    ivf_ok = pdh_ok and ivf_ratio is not None and ivf_ratio >= 3.0
     sentiment = classify_sentiment(change_pct)
 
     signals = []
@@ -1248,7 +1284,9 @@ def build_scan_row(symbol, quote, now=None):
         signals.append('NEAR 52W HIGH')
     if week52_momentum_ok:
         signals.append('52W HIGH +2% + 3X')
-    if not (pdh_ok or gain_ok or volume_ok or week52_ok):
+    if ivf_ok:
+        signals.append('IVF')
+    if not (pdh_ok or gain_ok or volume_ok or week52_ok or ivf_ok):
         return None
 
     return {
@@ -1261,6 +1299,11 @@ def build_scan_row(symbol, quote, now=None):
         'volume_ratio': volume_ratio,
         'avg_same_time_volume': avg_same_time,
         'volume_sessions': sessions,
+        'ivf_volume_ratio': ivf_ratio,
+        'ivf_candle_volume': ivf_candle_volume,
+        'ivf_volume_sessions': ivf_sessions,
+        'ivf_candle_time': (f"{ivf_slot // 60:02d}:{ivf_slot % 60:02d}" if ivf_slot is not None else None),
+        'ivf_ok': ivf_ok,
         'prev_day_high': prev_day_high,
         'week52_high': week52_high,
         'week52_distance_pct': week52_distance,
