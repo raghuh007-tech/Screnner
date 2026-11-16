@@ -406,6 +406,31 @@ $('runStrategy').addEventListener('click', async () => {
 setInterval(refreshStrategyStatus, 5000);
 refreshStrategyStatus();
 
+
+async function refreshStrategyV2Status() {
+  try {
+    const s=await api('/api/backtest/strategy/v2/status');
+    $('strategyV2Message').textContent=s.message||s.status;
+    $('runStrategyV2').disabled=s.status==='running'||s.status==='calculating';
+    $('runStrategyV2').textContent=$('runStrategyV2').disabled?'Calculating…':'Run IVF V2 Backtest';
+    if(s.status==='complete'){
+      const r=await api('/api/backtest/strategy/v2/results'),x=r.summary||{};
+      $('v2Trades').textContent=fmt(x.total_trades||0,0); $('v2WinRate').textContent=fmt(x.win_rate_pct||0,1)+'%';
+      $('v2Gross').textContent=money(x.gross_pnl); $('v2Brokerage').textContent=money(x.brokerage_total);
+      $('v2Net').textContent=money(x.net_pnl); $('v2DD').textContent=money(x.max_drawdown);
+      $('strategyV2Trades').innerHTML=(r.trades||[]).map(t=>'<tr><td>'+esc(t.date)+'<br>'+esc(t.symbol)+'</td><td>'+fmt(t.entry,2)+'<br>'+t.entry_time+'</td><td>'+fmt(t.stop,2)+'<br>'+fmt(t.stop_pct,2)+'%</td><td>'+fmt(t.exit,2)+'<br>'+t.exit_time+'</td><td>'+fmt(t.qty,0)+'</td><td>'+fmt(t.ivf_multiple,2)+'×</td><td>'+money(t.net_pnl)+'</td><td>'+esc(t.exit_reason)+'</td></tr>').join('')||'<tr><td colspan="8" class="empty">No qualifying IVF V2 trades found.</td></tr>';
+      $('strategyV2Message').textContent=x.data_note||s.message;
+    }
+  }catch(e){$('strategyV2Message').textContent='IVF V2 status unavailable: '+e.message;}
+}
+$('runStrategyV2').addEventListener('click',async()=>{
+  const b=$('runStrategyV2');b.disabled=true;b.textContent='Starting…';
+  try{const response=await fetch('/api/backtest/strategy/v2/run',{method:'POST',credentials:'same-origin'});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not start IVF V2');$('strategyV2Message').textContent=data.message||'IVF V2 started.';await refreshStrategyV2Status();}
+  catch(e){$('strategyV2Message').textContent=e.message;b.disabled=false;b.textContent='Run IVF V2 Backtest';}
+});
+setInterval(refreshStrategyV2Status,5000);
+refreshStrategyV2Status();
+
 $('startBacktest').addEventListener('click', async () => {
   const button = $('startBacktest');
   button.disabled = true;
