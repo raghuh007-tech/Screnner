@@ -2,8 +2,8 @@ name: F&O scanner market-hours schedule
 
 on:
   schedule:
-    # 9:15 AM IST = 03:45 UTC, Monday to Friday
-    - cron: "45 3 * * 1-5"
+    # 9:00 AM IST = 03:30 UTC, Monday to Friday
+    - cron: "30 3 * * 1-5"
     # 3:00 PM IST = 09:30 UTC, Monday to Friday
     - cron: "30 9 * * 1-5"
   workflow_dispatch:
@@ -21,23 +21,51 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Resume scanner at market open
-        if: (github.event_name == 'schedule' && github.event.schedule == '45 3 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.action == 'resume')
+        if: (github.event_name == 'schedule' && github.event.schedule == '30 3 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.action == 'resume')
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
+          set -euo pipefail
           test -n "$RENDER_API_KEY" || (echo "Missing GitHub Actions secret: RENDER_API_KEY" && exit 1)
-          curl --fail-with-body --silent --show-error --request POST \
-            --url "https://api.render.com/v1/services/srv-dbpb980m7kps73ae4h5g/resume" \
+          SERVICE_STATUS=$(curl --fail-with-body --silent --show-error \
             --header "Authorization: Bearer $RENDER_API_KEY" \
-            --header "Accept: application/json"
+            --header "Accept: application/json" \
+            "https://api.render.com/v1/services/srv-dbpb980m7kps73ae4h5g" | jq -r '.suspended // empty')
+          echo "Current Render suspension status: $SERVICE_STATUS"
+          if [ "$SERVICE_STATUS" = "suspended" ]; then
+            curl --fail-with-body --silent --show-error --request POST \
+              --url "https://api.render.com/v1/services/srv-dbpb980m7kps73ae4h5g/resume" \
+              --header "Authorization: Bearer $RENDER_API_KEY" \
+              --header "Accept: application/json"
+            echo "Scanner resume requested."
+          elif [ "$SERVICE_STATUS" = "not_suspended" ]; then
+            echo "Scanner is already running; no action needed."
+          else
+            echo "Unexpected or missing Render suspension status: $SERVICE_STATUS" >&2
+            exit 1
+          fi
 
       - name: Suspend scanner after market close
         if: (github.event_name == 'schedule' && github.event.schedule == '30 9 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.action == 'suspend')
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
+          set -euo pipefail
           test -n "$RENDER_API_KEY" || (echo "Missing GitHub Actions secret: RENDER_API_KEY" && exit 1)
-          curl --fail-with-body --silent --show-error --request POST \
-            --url "https://api.render.com/v1/services/srv-dbpb980m7kps73ae4h5g/suspend" \
+          SERVICE_STATUS=$(curl --fail-with-body --silent --show-error \
             --header "Authorization: Bearer $RENDER_API_KEY" \
-            --header "Accept: application/json"
+            --header "Accept: application/json" \
+            "https://api.render.com/v1/services/srv-dbpb980m7kps73ae4h5g" | jq -r '.suspended // empty')
+          echo "Current Render suspension status: $SERVICE_STATUS"
+          if [ "$SERVICE_STATUS" = "not_suspended" ]; then
+            curl --fail-with-body --silent --show-error --request POST \
+              --url "https://api.render.com/v1/services/srv-dbpb980m7kps73ae4h5g/suspend" \
+              --header "Authorization: Bearer $RENDER_API_KEY" \
+              --header "Accept: application/json"
+            echo "Scanner suspension requested."
+          elif [ "$SERVICE_STATUS" = "suspended" ]; then
+            echo "Scanner is already suspended; no action needed."
+          else
+            echo "Unexpected or missing Render suspension status: $SERVICE_STATUS" >&2
+            exit 1
+          fi
