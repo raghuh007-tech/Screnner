@@ -1,15 +1,10 @@
-name: F&O scanner market-hours schedule
+name: F&O scanner manual Render controls
 
 on:
-  schedule:
-    # 9:00 AM IST = 03:30 UTC, Monday to Friday
-    - cron: "30 3 * * 1-5"
-    # 3:00 PM IST = 09:30 UTC, Monday to Friday
-    - cron: "30 9 * * 1-5"
   workflow_dispatch:
     inputs:
       action:
-        description: "Manual action"
+        description: "Manual service action"
         required: true
         type: choice
         options:
@@ -20,8 +15,8 @@ jobs:
   control-render:
     runs-on: ubuntu-latest
     steps:
-      - name: Resume scanner at market open
-        if: (github.event_name == 'schedule' && github.event.schedule == '30 3 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.action == 'resume')
+      - name: Resume scanner service
+        if: inputs.action == 'resume'
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
@@ -37,16 +32,16 @@ jobs:
               --url "https://api.render.com/v1/services/srv-dbpb980m7kps73ae4h5g/resume" \
               --header "Authorization: Bearer $RENDER_API_KEY" \
               --header "Accept: application/json"
-            echo "Scanner resume requested."
+            echo "Resume requested."
           elif [ "$SERVICE_STATUS" = "not_suspended" ]; then
-            echo "Scanner is already running; no action needed."
+            echo "Service is already running; no action needed."
           else
             echo "Unexpected or missing Render suspension status: $SERVICE_STATUS" >&2
             exit 1
           fi
 
-      - name: Suspend scanner after market close
-        if: (github.event_name == 'schedule' && github.event.schedule == '30 9 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.action == 'suspend')
+      - name: Suspend scanner service
+        if: inputs.action == 'suspend'
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
@@ -62,9 +57,9 @@ jobs:
               --url "https://api.render.com/v1/services/srv-dbpb980m7kps73ae4h5g/suspend" \
               --header "Authorization: Bearer $RENDER_API_KEY" \
               --header "Accept: application/json"
-            echo "Scanner suspension requested."
+            echo "Suspend requested."
           elif [ "$SERVICE_STATUS" = "suspended" ]; then
-            echo "Scanner is already suspended; no action needed."
+            echo "Service is already suspended; no action needed."
           else
             echo "Unexpected or missing Render suspension status: $SERVICE_STATUS" >&2
             exit 1
