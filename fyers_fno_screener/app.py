@@ -560,28 +560,62 @@ def api_slot(priority=False):
                         wait = max(wait, 1.0 - (now - _kite_history_times[0]) + 0.02)
             time.sleep(max(wait, 0.02))
     else:
-        while True:
-            with _api_lock:
-                now = time.monotonic()
-                while _api_times and now - _api_times[0] >= 60:
-                    _api_times.popleft()
-                while _history_times and now - _history_times[0] >= 60:
-                    _history_times.popleft()
-                total_ok = len(_api_times) < 44
-                history_ok = priority or len(_history_times) < 25
-                spacing_ok = not _api_times or now - _api_times[-1] >= 0.22
-                if total_ok and history_ok and spacing_ok:
-                    _api_times.append(now)
-                    if not priority:
-                        _history_times.append(now)
-                    return
-                waits = [0.23]
-                if not total_ok and _api_times:
-                    waits.append(60 - (now - _api_times[0]) + 0.05)
-                if not history_ok and _history_times:
-                    waits.append(60 - (now - _history_times[0]) + 0.05)
-                wait = max(waits)
-            time.sleep(wait)
+        _fyers_api_slot(priority=priority)
+
+
+def _fyers_api_slot(priority=False):
+    """Serialize all FYERS data calls below 5 requests/second with rolling safety caps.
+
+    The FYERS test connection is separate from the active broker, so it must
+    use this same limiter even when Zerodha is the production provider.
+    """
+    while True:
+        with _api_lock:
+            now = time.monotonic()
+            while _api_times and now - _api_times[0] >= 60:
+                _api_times.popleft()
+            while _history_times and now - _history_times[0] >= 60:
+                _history_times.popleft()
+            total_ok = len(_api_times) < 44
+            history_ok = priority or len(_history_times) < 25
+            # 0.30s spacing gives a 3.3 req/s ceiling, safely below 5 req/s.
+            spacing_ok = not _api_times or now - _api_times[-1] >= 0.30
+            if total_ok and history_ok and spacing_ok:
+                _api_times.append(now)
+                if not priority:
+                    _history_times.append(now)
+                return
+            waits = [0.31]
+            if not total_ok and _api_times:
+                waits.append(60 - (now - _api_times[0]) + 0.05)
+            if not history_ok and _history_times:
+                waits.append(60 - (now - _history_times[0]) + 0.05)
+            wait = max(waits)
+        time.sleep(wait)
+
+
+def fyers_data_get(path, headers, params=None, timeout=25, priority=False):
+    """Make a throttled FYERS data request; retry one explicit rate-limit response."""
+    for attempt in range(2):
+        _fyers_api_slot(priority=priority)
+        response = requests.get(
+            FYERS_DATA_ROOT + path, headers=headers, params=params, timeout=timeout
+        )
+        rate_limited = response.status_code == 429
+        if not rate_limited and response.ok:
+            try:
+                payload = response.json()
+                message = str(payload.get('message') or payload.get('errmsg') or '').lower()
+                rate_limited = payload.get('s') == 'error' and (
+                    'rate' in message or 'request limit' in message or 'too many' in message
+                )
+            except (ValueError, AttributeError):
+                pass
+        if rate_limited and attempt == 0:
+            app.logger.warning('FYERS rate limit response for %s; retrying once after backoff.', path)
+            time.sleep(1.5)
+            continue
+        return response
 
 
 def kite_headers():
@@ -611,8 +645,9 @@ def broker_get(path, params=None, priority=False):
         if payload.get('status') == 'error':
             raise RuntimeError(payload.get('message') or str(payload))
         return payload
-    api_slot(priority=priority)
-    response = requests.get(FYERS_DATA_ROOT + path, headers=fyers_headers(), params=params, timeout=25)
+    response = fyers_data_get(
+        path, headers=fyers_headers(), params=params, timeout=25, priority=priority
+    )
     if response.status_code == 429:
         raise RuntimeError('FYERS data API rate limit reached. The scanner will retry on its next refresh.')
     response.raise_for_status()
@@ -1620,11 +1655,10 @@ def fyers_test_data():
             'NSE:SBIN-EQ',
         ]
         result = {'quotes': [], 'history': []}
-        quote_response = requests.get(
-            FYERS_DATA_ROOT + '/quotes',
-            headers=headers,
+        quote_response = fyers_data_get(
+            '/quotes', headers=headers,
             params={'symbols': ','.join(symbols)},
-            timeout=20,
+            timeout=20, priority=True,
         )
         quote_data = quote_response.json()
         quote_items = {
@@ -1645,8 +1679,8 @@ def fyers_test_data():
         start_date = end_date - timedelta(days=5)
         for symbol in symbols:
             try:
-                history_response = requests.get(
-                    FYERS_DATA_ROOT + '/history',
+                history_response = fyers_data_get(
+                    '/history',
                     headers=headers,
                     params={
                         'symbol': symbol,
@@ -1656,7 +1690,7 @@ def fyers_test_data():
                         'range_to': end_date.isoformat(),
                         'cont_flag': '0',
                     },
-                    timeout=20,
+                    timeout=20, priority=False,
                 )
                 history_data = history_response.json()
                 candles = history_data.get('candles') or []
