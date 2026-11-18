@@ -2,11 +2,8 @@ name: F&O scanner Render market-hours controls
 
 on:
   schedule:
-    # Resume attempts: 8:45, 8:50, 8:55, 9:00, 9:05, 9:10, 9:15 and 9:20 IST (Mon-Fri).
+    # Resume attempts: 9:00, 9:05, 9:10, 9:15 and 9:20 IST (Mon-Fri).
     # Repeated attempts reduce the impact of a delayed or dropped GitHub schedule event.
-    - cron: "15 3 * * 1-5"
-    - cron: "20 3 * * 1-5"
-    - cron: "25 3 * * 1-5"
     - cron: "30 3 * * 1-5"
     - cron: "35 3 * * 1-5"
     - cron: "40 3 * * 1-5"
@@ -62,7 +59,7 @@ jobs:
             TARGET_ACTION="$MANUAL_ACTION"
           else
             case "$SCHEDULE_CRON" in
-              "15 3 * * 1-5"|"20 3 * * 1-5"|"25 3 * * 1-5"|"30 3 * * 1-5"|"35 3 * * 1-5"|"40 3 * * 1-5"|"45 3 * * 1-5"|"50 3 * * 1-5")
+              "30 3 * * 1-5"|"35 3 * * 1-5"|"40 3 * * 1-5"|"45 3 * * 1-5"|"50 3 * * 1-5")
                 TARGET_ACTION="resume"
                 ;;
               "30 9 * * 1-5"|"35 9 * * 1-5"|"40 9 * * 1-5"|"45 9 * * 1-5"|"50 9 * * 1-5")
@@ -191,12 +188,14 @@ jobs:
             elif [[ "$SERVICE_STATUS" == "suspended" ]]; then
               echo "Requesting Render resume..."
               if ! api_request POST "$API_BASE/resume"; then
+                RESUME_ERROR="$API_BODY"
                 # A manual action might have changed the state while the request was in flight.
                 if read_service_state && [[ "$SERVICE_STATUS" == "not_suspended" ]]; then
                   echo "Render became active during the request; treating this as success."
                 else
-                  if [[ "$API_BODY" == *"only services suspended by a user can be resumed"* ]]; then
+                  if [[ "$RESUME_ERROR" == *"only services suspended by a user can be resumed"* ]]; then
                     echo "Render rejected resume because this suspension is not eligible for API resume." >&2
+                    echo "Render API response: $RESUME_ERROR" >&2
                     echo "Observed suspenders: $SERVICE_SUSPENDERS" >&2
                     echo "Manual intervention is required in the Render Dashboard." >&2
                   fi
