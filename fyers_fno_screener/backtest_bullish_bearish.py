@@ -147,10 +147,7 @@ def _simulate_one(symbol, day, candles, direction, levels, volume_multiple):
     third_high, third_low = float(c925[2]), float(c925[3])
 
     if direction == "BULLISH":
-        if not (first_high >= levels["ath"] or
-                first_high >= levels["week52_high"]):
-            return None, "not_at_ath_or_52week_high"
-        # Second candle must break the first candle high.
+    # Second candle must break the first candle high.
         if second_high <= first_high:
             return None, "second_candle_did_not_break_first_high"
         # Entry is only on the third candle, when it breaks the second candle high.
