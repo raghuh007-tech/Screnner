@@ -158,9 +158,6 @@ def _simulate_one(symbol, day, candles, direction, levels, volume_multiple):
         entry_time = "09:25"
         risk_pct = (entry - stop) / entry
     else:
-        if not (first_low <= levels["atl"] or
-                first_low <= levels["week52_low"]):
-            return None, "not_at_atl_or_52week_low"
         # Second candle must break below the first candle low.
         if second_low >= first_low:
             return None, "second_candle_did_not_break_first_low"
@@ -293,6 +290,6 @@ def run_backtest(connection: sqlite3.Connection, nifty_symbol: str = "NIFTY 50")
         "brokerage_per_trade": BROKERAGE_PER_TRADE,
         "exit_rule": "Exit at stop or 3:00 PM (14:55 candle close)",
         "excluded_candidates": dict(excluded),
-        "data_note": "Historical Oldpal breadth reconstructed from available F&O symbols using live thresholds (>+0.25% bullish, <-0.25% bearish; breadth score +/-0.10). ATH/ATL and 52-week levels use prior daily candles only. IVF uses first 09:15 candle volume versus the same slot average over 20 prior sessions. Entry is approximated from 5-minute OHLC; intrabar order is unknown. 14:55 candle close represents 3:00 PM. ₹137 flat brokerage estimate; slippage and statutory charges excluded. Historical F&O universe coverage depends on symbols stored."
+        "data_note": "Historical Oldpal breadth reconstructed from available F&O symbols using live thresholds (>+0.25% bullish, <-0.25% bearish; breadth score +/-0.10). No ATH, ATL, or 52-week filters are applied. IVF uses first 09:15 candle volume versus the same slot average over 20 prior sessions. Entry is approximated from 5-minute OHLC; intrabar order is unknown. 14:55 candle close represents 3:00 PM. ₹137 flat brokerage estimate; slippage and statutory charges excluded. Historical F&O universe coverage depends on symbols stored."
     }
     return {"status": "complete", "summary": summary, "trades": trades}
