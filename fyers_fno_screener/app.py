@@ -11,6 +11,8 @@ import secrets
 import threading
 import sqlite3
 import tempfile
+import gzip
+import shutil
 from collections import deque
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
