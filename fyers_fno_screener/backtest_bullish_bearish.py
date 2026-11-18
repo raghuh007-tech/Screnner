@@ -238,7 +238,8 @@ def run_backtest(connection: sqlite3.Connection, nifty_symbol: str = "NIFTY 50")
 
     trades, excluded = [], Counter()
     for symbol, item in data.items():
-        if symbol == index_key:
+        normalized_symbol = symbol.upper().split(":")[-1].replace("-EQ", "")
+        if normalized_symbol in {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"} or normalized_symbol.startswith("NIFTY "):
             continue
         sessions, daily = item["5"], item["D"]
         dates = sorted(sessions)
