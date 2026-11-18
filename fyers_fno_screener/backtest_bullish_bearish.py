@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 IST = ZoneInfo("Asia/Kolkata")
 CAPITAL_PER_TRADE = 250_000.0
 BROKERAGE_PER_TRADE = 137.0
-EXIT_CUTOFF = time(15, 0)
+EXIT_CUTOFF = time(14, 55)
 FIRST_CANDLE = time(9, 15)
 CANDLE_920 = time(9, 20)
 CANDLE_925 = time(9, 25)
@@ -46,18 +46,24 @@ def _slot(rows, wanted):
     return next((c for c in rows if local_time(c).time() == wanted), None)
 
 
-def _trend_for_day(index_sessions, day):
-    """Historical Nifty direction: compare that session's first 5m open to close.
-
-    Returns Bullish/Bearish/Neutral. Requires a valid Nifty 09:15 candle.
-    This deliberately avoids using future full-day close to gate an intraday trade.
-    """
-    rows = index_sessions.get(day, [])
-    first = _slot(rows, FIRST_CANDLE)
-    if not first:
-        return "Unavailable"
-    o, c = float(first[1]), float(first[4])
-    return "Bullish" if c > o else "Bearish" if c < o else "Neutral"
+def _trend_for_day(data, day):
+    bullish = bearish = valid = 0
+    for symbol, item in data.items():
+        first = _slot(item['5'].get(day, []), FIRST_CANDLE)
+        prior_days = [d for d in item['D'] if d < day]
+        if first is None or not prior_days:
+            continue
+        previous = item['D'][max(prior_days)]
+        previous_close = float(previous[-1][4])
+        if previous_close <= 0:
+            continue
+        pct = (float(first[4]) / previous_close - 1.0) * 100.0
+        valid += 1
+        if pct > 0.25: bullish += 1
+        elif pct < -0.25: bearish += 1
+    if not valid: return 'Unavailable'
+    score = (bullish - bearish) / valid
+    return 'Bullish' if score >= 0.10 else 'Bearish' if score <= -0.10 else 'Neutral'
 
 
 def _daily_levels(daily_by_day, day):
@@ -232,11 +238,7 @@ def run_backtest(connection: sqlite3.Connection, nifty_symbol: str = "NIFTY 50")
             if parsed:
                 data[symbol][tf][row["session_date"]] = parsed
 
-    index_key = next((s for s in data if s.upper().replace(" ", "") in
-                      {nifty_symbol.upper().replace(" ", ""), "NIFTY50", "NSE:NIFTY50-INDEX"}), None)
-    if index_key is None:
-        raise RuntimeError("Nifty 50 5-minute history is missing; cannot apply market-direction filter.")
-    index_sessions = data[index_key]["5"]
+
 
     trades, excluded = [], Counter()
     for symbol, item in data.items():
@@ -245,9 +247,9 @@ def run_backtest(connection: sqlite3.Connection, nifty_symbol: str = "NIFTY 50")
         sessions, daily = item["5"], item["D"]
         dates = sorted(sessions)
         for i, day in enumerate(dates):
-            trend = _trend_for_day(index_sessions, day)
+            trend = _trend_for_day(data, day)
             if trend not in ("Bullish", "Bearish"):
-                excluded["nifty_not_directional_or_missing"] += 1
+                excluded["oldpal_sentiment_not_directional_or_missing"] += 1
                 continue
             levels = _daily_levels({d: cs[-1] for d, cs in daily.items()}, day)
             if not levels:
