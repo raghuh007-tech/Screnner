@@ -1,14 +1,19 @@
 name: F&O scanner Render market-hours controls
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/render-market-hours.yml"
   schedule:
-    # Resume attempts: 9:00, 9:05, 9:10, 9:15 and 9:20 IST (Mon-Fri).
-    # Repeated attempts reduce the impact of a delayed or dropped GitHub schedule event.
+    # Resume attempts: 8:45, 8:50, 8:55, 9:00 and 9:05 IST (Mon-Fri).
+    # Early checks provide a startup buffer; the dashboard remains market-hours gated.
+    - cron: "15 3 * * 1-5"
+    - cron: "20 3 * * 1-5"
+    - cron: "25 3 * * 1-5"
     - cron: "30 3 * * 1-5"
     - cron: "35 3 * * 1-5"
-    - cron: "40 3 * * 1-5"
-    - cron: "45 3 * * 1-5"
-    - cron: "50 3 * * 1-5"
     # Suspend attempts: 3:00, 3:05, 3:10, 3:15 and 3:20 PM IST (Mon-Fri).
     - cron: "30 9 * * 1-5"
     - cron: "35 9 * * 1-5"
@@ -24,6 +29,7 @@ on:
         options:
           - resume
           - suspend
+          - verify
 
 # Avoid two start/stop requests racing each other.
 concurrency:
@@ -57,9 +63,11 @@ jobs:
 
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             TARGET_ACTION="$MANUAL_ACTION"
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            TARGET_ACTION="verify"
           else
             case "$SCHEDULE_CRON" in
-              "30 3 * * 1-5"|"35 3 * * 1-5"|"40 3 * * 1-5"|"45 3 * * 1-5"|"50 3 * * 1-5")
+              "15 3 * * 1-5"|"20 3 * * 1-5"|"25 3 * * 1-5"|"30 3 * * 1-5"|"35 3 * * 1-5")
                 TARGET_ACTION="resume"
                 ;;
               "30 9 * * 1-5"|"35 9 * * 1-5"|"40 9 * * 1-5"|"45 9 * * 1-5"|"50 9 * * 1-5")
@@ -182,7 +190,14 @@ jobs:
             exit 1
           fi
 
-          if [[ "$TARGET_ACTION" == "resume" ]]; then
+          if [[ "$TARGET_ACTION" == "verify" ]]; then
+            echo "Push/manual verification only; no service lifecycle action will be taken."
+            if [[ "$SERVICE_STATUS" == "not_suspended" ]]; then
+              wait_for_dashboard_health
+            else
+              echo "Service is suspended; skipping HTTP health check because this may be outside market hours."
+            fi
+          elif [[ "$TARGET_ACTION" == "resume" ]]; then
             if [[ "$SERVICE_STATUS" == "not_suspended" ]]; then
               echo "Render is already active; no resume request needed."
             elif [[ "$SERVICE_STATUS" == "suspended" ]]; then
