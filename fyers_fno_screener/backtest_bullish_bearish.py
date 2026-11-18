@@ -142,49 +142,37 @@ def _simulate_one(symbol, day, candles, direction, levels, volume_multiple):
     if max_excursion >= 0.06:
         return None, "first_candle_excursion_from_previous_close_6pct_or_more"
 
+    first_high, first_low = float(first[2]), float(first[3])
+    second_high, second_low = float(c920[2]), float(c920[3])
+    third_high, third_low = float(c925[2]), float(c925[3])
+
     if direction == "BULLISH":
-        if not (float(first[2]) >= levels["ath"] or
-                float(first[2]) >= levels["week52_high"]):
+        if not (first_high >= levels["ath"] or
+                first_high >= levels["week52_high"]):
             return None, "not_at_ath_or_52week_high"
-        c920_high, c925_high = float(c920[2]), float(c925[2])
-        if c925_high > c920_high:
-            trigger, stop, entry_candle = c925_high, float(c925[3]), c925
-        else:
-            trigger, stop, entry_candle = c920_high, float(c925[3]), c925
-        crossed = False
-        for c in candles:
-            t = local_time(c).time()
-            if t <= CANDLE_925 or t >= EXIT_CUTOFF:
-                continue
-            if float(c[2]) >= trigger:
-                crossed = True
-                entry = max(trigger, float(c[1]))
-                entry_time = local_time(c).strftime("%H:%M")
-                break
-        if not crossed:
-            return None, "no_entry_trigger"
+        # Second candle must break the first candle high.
+        if second_high <= first_high:
+            return None, "second_candle_did_not_break_first_high"
+        # Entry is only on the third candle, when it breaks the second candle high.
+        trigger, stop = second_high, third_low
+        if third_high < trigger:
+            return None, "third_candle_did_not_break_second_high"
+        entry = max(trigger, float(c925[1]))
+        entry_time = "09:25"
         risk_pct = (entry - stop) / entry
     else:
-        if not (float(first[3]) <= levels["atl"] or
-                float(first[3]) <= levels["week52_low"]):
+        if not (first_low <= levels["atl"] or
+                first_low <= levels["week52_low"]):
             return None, "not_at_atl_or_52week_low"
-        c920_low, c925_low = float(c920[3]), float(c925[3])
-        if c925_low < c920_low:
-            trigger, stop = c925_low, float(c925[2])
-        else:
-            trigger, stop = c920_low, float(c925[2])
-        crossed = False
-        for c in candles:
-            t = local_time(c).time()
-            if t <= CANDLE_925 or t >= EXIT_CUTOFF:
-                continue
-            if float(c[3]) <= trigger:
-                crossed = True
-                entry = min(trigger, float(c[1]))
-                entry_time = local_time(c).strftime("%H:%M")
-                break
-        if not crossed:
-            return None, "no_entry_trigger"
+        # Second candle must break below the first candle low.
+        if second_low >= first_low:
+            return None, "second_candle_did_not_break_first_low"
+        # Entry is only on the third candle, when it breaks below the second candle low.
+        trigger, stop = second_low, third_high
+        if third_low > trigger:
+            return None, "third_candle_did_not_break_second_low"
+        entry = min(trigger, float(c925[1]))
+        entry_time = "09:25"
         risk_pct = (stop - entry) / entry
 
     if risk_pct <= 0 or risk_pct > 0.02:
