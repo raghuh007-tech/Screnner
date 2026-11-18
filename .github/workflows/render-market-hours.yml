@@ -80,7 +80,7 @@ jobs:
             esac
           fi
 
-          if [[ "$TARGET_ACTION" != "resume" && "$TARGET_ACTION" != "suspend" ]]; then
+          if [[ "$TARGET_ACTION" != "resume" && "$TARGET_ACTION" != "suspend" && "$TARGET_ACTION" != "verify" ]]; then
             echo "Invalid action: $TARGET_ACTION" >&2
             exit 1
           fi
