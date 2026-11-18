@@ -68,20 +68,21 @@ def _trend_for_day(data, day):
 
 def _daily_levels(daily_by_day, day):
     dates = sorted(d for d in daily_by_day if d < day)
-    prior = [d for d in dates if d < day]
-    if not prior:
+    if not dates:
         return None
-    previous_day = prior[-1]
-    previous = daily_by_day[previous_day]
-    trailing = [daily_by_day[d] for d in prior if (datetime.fromisoformat(day).date() -
-                datetime.fromisoformat(d).date()).days <= 366]
+    previous = daily_by_day[dates[-1]]
+    current_date = datetime.fromisoformat(day).date()
+    trailing = [daily_by_day[d] for d in dates
+                if (current_date - datetime.fromisoformat(d).date()).days <= 366]
     if not trailing:
         return None
     return {
-        "pdh": max(float(previous[2]), float(previous[1])),
-        "pdl": min(float(previous[3]), float(previous[1])),
+        "pdh": float(previous[2]),
+        "pdl": float(previous[3]),
         "week52_high": max(float(c[2]) for c in trailing),
         "week52_low": min(float(c[3]) for c in trailing),
+        "ath": max(float(daily_by_day[d][2]) for d in dates),
+        "atl": min(float(daily_by_day[d][3]) for d in dates),
     }
 
 
@@ -114,6 +115,7 @@ def _make_trade(symbol, day, direction, entry, stop, trigger, entry_time,
         "pdh": round(levels["pdh"], 2), "pdl": round(levels["pdl"], 2),
         "week52_high": round(levels["week52_high"], 2),
         "week52_low": round(levels["week52_low"], 2),
+        "ath": round(levels["ath"], 2), "atl": round(levels["atl"], 2),
     }
 
 
@@ -133,11 +135,9 @@ def _simulate_one(symbol, day, candles, direction, levels, volume_multiple):
         return None, "first_candle_range_6pct_or_more"
 
     if direction == "BULLISH":
-        if not (float(first[2]) >= levels["week52_high"] or
-                float(first[2]) >= levels["week52_high"] * 0.999999):
-            # Current session's first candle high touching the prior 52-week high
-            # is accepted as a 52-week-high proxy.
-            return None, "not_at_52week_high"
+        if not (float(first[2]) >= levels["ath"] or
+                float(first[2]) >= levels["week52_high"]):
+            return None, "not_at_ath_or_52week_high"
         c920_high, c925_high = float(c920[2]), float(c925[2])
         if c925_high > c920_high:
             trigger, stop, entry_candle = c925_high, float(c925[3]), c925
@@ -157,9 +157,9 @@ def _simulate_one(symbol, day, candles, direction, levels, volume_multiple):
             return None, "no_entry_trigger"
         risk_pct = (entry - stop) / entry
     else:
-        if not (float(first[3]) <= levels["week52_low"] or
-                float(first[3]) <= levels["week52_low"] * 1.000001):
-            return None, "not_at_52week_low"
+        if not (float(first[3]) <= levels["atl"] or
+                float(first[3]) <= levels["week52_low"]):
+            return None, "not_at_atl_or_52week_low"
         c920_low, c925_low = float(c920[3]), float(c925[3])
         if c925_low < c920_low:
             trigger, stop = c925_low, float(c925[2])
@@ -216,11 +216,7 @@ def _simulate_one(symbol, day, candles, direction, levels, volume_multiple):
 
 
 def run_backtest(connection: sqlite3.Connection, nifty_symbol: str = "NIFTY 50"):
-    """Read-only calculation over existing backtest_candles table.
-
-    Expects timeframe='5' and timeframe='D' rows with [epoch,o,h,l,c,v].
-    The index symbol must be present in 5m data for the Nifty direction filter.
-    """
+    """Read-only calculation over existing backtest_candles using reconstructed Oldpal breadth."""
     connection.row_factory = sqlite3.Row
     symbols = [r[0] for r in connection.execute(
         "SELECT DISTINCT symbol FROM backtest_candles WHERE timeframe IN ('5','5m') ORDER BY symbol"
@@ -301,8 +297,8 @@ def run_backtest(connection: sqlite3.Connection, nifty_symbol: str = "NIFTY 50")
         "avg_net_per_trade": round(net / len(trades), 2) if trades else 0,
         "capital_per_trade": CAPITAL_PER_TRADE,
         "brokerage_per_trade": BROKERAGE_PER_TRADE,
-        "exit_rule": "Exit at stop or 3:00 PM",
+        "exit_rule": "Exit at stop or 3:00 PM (14:55 candle close)",
         "excluded_candidates": dict(excluded),
-        "data_note": "5-minute OHLCV; entry trigger approximated by candle high/low crossing. ₹137 flat brokerage estimate; slippage and other statutory charges excluded."
+        "data_note": "Historical Oldpal breadth reconstructed from available F&O symbols using live thresholds (>+0.25% bullish, <-0.25% bearish; breadth score +/-0.10). ATH/ATL and 52-week levels use prior daily candles only. IVF uses first 09:15 candle volume versus the same slot average over 20 prior sessions. Entry is approximated from 5-minute OHLC; intrabar order is unknown. 14:55 candle close represents 3:00 PM. ₹137 flat brokerage estimate; slippage and statutory charges excluded. Historical F&O universe coverage depends on symbols stored."
     }
     return {"status": "complete", "summary": summary, "trades": trades}
