@@ -10,6 +10,7 @@ import hashlib
 import secrets
 import threading
 import sqlite3
+import tempfile
 from collections import deque
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
@@ -2588,6 +2589,55 @@ def backtest_test_history():
     except Exception as exc:
         app.logger.warning('Backtest single-stock history diagnostic failed: %s', exc)
         return jsonify({'ok': False, 'error': str(exc)}), 502
+
+
+@app.route('/api/backtest/bullbear/export')
+def backtest_bullbear_export():
+    """Export only historical backtest candles for the isolated bull/bear research branch."""
+    temp_path = None
+    try:
+        with history_db_lock:
+            with _history_db_connect() as source:
+                row = source.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='backtest_candles'"
+                ).fetchone()
+                if not row:
+                    return jsonify({'error': 'Historical backtest_candles table is not available.'}), 404
+                handle = tempfile.NamedTemporaryFile(prefix='bullbear-candles-', suffix='.sqlite3', delete=False)
+                temp_path = handle.name
+                handle.close()
+                with sqlite3.connect(temp_path) as target:
+                    source.backup(target, pages=256, name='main')
+                    # Keep only the historical candle table; do not export app tokens,
+                    # login metadata, backtest results, errors, or other private tables.
+                    target.execute("DROP TABLE IF EXISTS backtest_chunks")
+                    target.execute("DROP TABLE IF EXISTS backtest_errors")
+                    target.execute("DROP TABLE IF EXISTS backtest_results")
+                    target.execute("DROP TABLE IF EXISTS candle_cache")
+                    target.execute("DROP TABLE IF EXISTS history_meta")
+                    target.execute("DROP TABLE IF EXISTS stock_sector_cache")
+                    target.execute("DROP TABLE IF EXISTS app_meta")
+                    target.execute("DROP TABLE IF EXISTS momentum_alert_active")
+                    target.execute("DROP TABLE IF EXISTS top_gainer_daily_state")
+                    target.execute("DROP TABLE IF EXISTS top_gainer_snapshot")
+                    target.commit()
+        with open(temp_path, 'rb') as exported:
+            payload = exported.read()
+        response = Response(
+            payload,
+            mimetype='application/vnd.sqlite3',
+            headers={'Content-Disposition': 'attachment; filename="bullbear_backtest_candles.sqlite3"'}
+        )
+        response.call_on_close(lambda: os.path.exists(temp_path) and os.unlink(temp_path))
+        return response
+    except Exception as exc:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+        app.logger.exception('Bull/bear historical candle export failed: %s', exc)
+        return jsonify({'error': 'Historical candle export failed.'}), 500
 
 
 @app.route('/api/backtest/status')
