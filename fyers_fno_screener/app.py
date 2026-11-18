@@ -2593,8 +2593,9 @@ def backtest_test_history():
 
 @app.route('/api/backtest/bullbear/export')
 def backtest_bullbear_export():
-    """Export only historical backtest candles for the isolated bull/bear research branch."""
-    temp_path = None
+    """Export historical candles as a compressed SQLite snapshot for isolated research."""
+    sqlite_path = None
+    gzip_path = None
     try:
         with history_db_lock:
             with _history_db_connect() as source:
@@ -2604,39 +2605,52 @@ def backtest_bullbear_export():
                 if not row:
                     return jsonify({'error': 'Historical backtest_candles table is not available.'}), 404
                 handle = tempfile.NamedTemporaryFile(prefix='bullbear-candles-', suffix='.sqlite3', delete=False)
-                temp_path = handle.name
+                sqlite_path = handle.name
                 handle.close()
-                with sqlite3.connect(temp_path) as target:
+                with sqlite3.connect(sqlite_path) as target:
                     source.backup(target, pages=256, name='main')
-                    # Keep only the historical candle table; do not export app tokens,
-                    # login metadata, backtest results, errors, or other private tables.
-                    target.execute("DROP TABLE IF EXISTS backtest_chunks")
-                    target.execute("DROP TABLE IF EXISTS backtest_errors")
-                    target.execute("DROP TABLE IF EXISTS backtest_results")
-                    target.execute("DROP TABLE IF EXISTS candle_cache")
-                    target.execute("DROP TABLE IF EXISTS history_meta")
-                    target.execute("DROP TABLE IF EXISTS stock_sector_cache")
-                    target.execute("DROP TABLE IF EXISTS app_meta")
-                    target.execute("DROP TABLE IF EXISTS momentum_alert_active")
-                    target.execute("DROP TABLE IF EXISTS top_gainer_daily_state")
-                    target.execute("DROP TABLE IF EXISTS top_gainer_snapshot")
+                    # Keep only historical candles; exclude app tokens, login metadata,
+                    # backtest results, errors, and other private tables.
+                    for table in (
+                        'backtest_chunks', 'backtest_errors', 'backtest_results',
+                        'candle_cache', 'history_meta', 'stock_sector_cache', 'app_meta',
+                        'momentum_alert_active', 'top_gainer_daily_state', 'top_gainer_snapshot'
+                    ):
+                        target.execute('DROP TABLE IF EXISTS "' + table + '"')
                     target.commit()
-        # Stream the file from disk. Do not load a 100+ MB SQLite export into RAM.
+
+        # Compress in bounded-memory chunks, then stream the compressed file.
+        handle = tempfile.NamedTemporaryFile(prefix='bullbear-candles-', suffix='.sqlite3.gz', delete=False)
+        gzip_path = handle.name
+        handle.close()
+        with open(sqlite_path, 'rb') as source_file, gzip.open(gzip_path, 'wb', compresslevel=6) as compressed:
+            shutil.copyfileobj(source_file, compressed, length=1024 * 1024)
+        os.unlink(sqlite_path)
+        sqlite_path = None
+
         response = send_file(
-            temp_path,
-            mimetype='application/vnd.sqlite3',
+            gzip_path,
+            mimetype='application/gzip',
             as_attachment=True,
-            download_name='bullbear_backtest_candles.sqlite3',
+            download_name='bullbear_backtest_candles.sqlite3.gz',
             conditional=False,
         )
-        response.call_on_close(lambda: os.path.exists(temp_path) and os.unlink(temp_path))
+        def cleanup_export_files():
+            for path in (sqlite_path, gzip_path):
+                if path and os.path.exists(path):
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        app.logger.warning('Could not remove temporary bull/bear export file: %s', path)
+        response.call_on_close(cleanup_export_files)
         return response
     except Exception as exc:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
+        for path in (sqlite_path, gzip_path):
+            if path and os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
         app.logger.exception('Bull/bear historical candle export failed: %s', exc)
         return jsonify({'error': 'Historical candle export failed.'}), 500
 
