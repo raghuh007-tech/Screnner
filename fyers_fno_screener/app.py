@@ -18,7 +18,7 @@ from urllib.parse import urlencode
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, Response, jsonify, render_template, redirect, request, session, url_for
+from flask import Flask, Response, jsonify, render_template, redirect, request, session, url_for, send_file
 
 from ivf_v2_validator import validate_ivf_v2
 
@@ -2621,12 +2621,13 @@ def backtest_bullbear_export():
                     target.execute("DROP TABLE IF EXISTS top_gainer_daily_state")
                     target.execute("DROP TABLE IF EXISTS top_gainer_snapshot")
                     target.commit()
-        with open(temp_path, 'rb') as exported:
-            payload = exported.read()
-        response = Response(
-            payload,
+        # Stream the file from disk. Do not load a 100+ MB SQLite export into RAM.
+        response = send_file(
+            temp_path,
             mimetype='application/vnd.sqlite3',
-            headers={'Content-Disposition': 'attachment; filename="bullbear_backtest_candles.sqlite3"'}
+            as_attachment=True,
+            download_name='bullbear_backtest_candles.sqlite3',
+            conditional=False,
         )
         response.call_on_close(lambda: os.path.exists(temp_path) and os.unlink(temp_path))
         return response
