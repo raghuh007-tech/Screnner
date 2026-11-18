@@ -83,6 +83,7 @@ def _daily_levels(daily_by_day, day):
         "week52_low": min(float(c[3]) for c in trailing),
         "ath": max(float(daily_by_day[d][2]) for d in dates),
         "atl": min(float(daily_by_day[d][3]) for d in dates),
+        "previous_close": float(previous[4]),
     }
 
 
@@ -129,10 +130,17 @@ def _simulate_one(symbol, day, candles, direction, levels, volume_multiple):
     if first is None:
         return None, "missing_first_5m"
 
-    # First candle range must be strictly below 6% of its open.
-    first_open = float(first[1])
-    if first_open <= 0 or (float(first[2]) - float(first[3])) / first_open >= 0.06:
-        return None, "first_candle_range_6pct_or_more"
+    # First-candle excursion from the previous daily close must be strictly below 6%.
+    # This includes opening gaps and both the first candle high and low.
+    previous_close = float(levels["previous_close"])
+    if previous_close <= 0:
+        return None, "invalid_previous_close"
+    max_excursion = max(
+        abs(float(first[2]) - previous_close),
+        abs(float(first[3]) - previous_close),
+    ) / previous_close
+    if max_excursion >= 0.06:
+        return None, "first_candle_excursion_from_previous_close_6pct_or_more"
 
     if direction == "BULLISH":
         if not (float(first[2]) >= levels["ath"] or
