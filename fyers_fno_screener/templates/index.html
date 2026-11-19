@@ -10,7 +10,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <title>Oldpal Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css?v=17">
+  <link rel="stylesheet" href="/static/style.css?v=18">
 </head>
 <body>
 <div class="shell">
@@ -52,6 +52,17 @@
   </section>
 
   <section class="panel gainers-panel"><div class="panel-head"><div><h2>Top 10 F&O gainers today</h2><p>Ranked by daily gain · colour shows confirmation strength</p></div></div><div id="gainersRows" class="gainers-list"><div class="empty">Waiting for market data.</div></div></section>
+  <section class="panel gainer-history-panel">
+    <details id="gainerHistoryDetails">
+      <summary>Top 10 change history <span id="gainerHistoryCount">Last 10 changes</span></summary>
+      <div class="table-wrap">
+        <table class="gainer-history-table">
+          <thead><tr><th>Time</th><th>Added</th><th>Removed</th></tr></thead>
+          <tbody id="gainerHistoryRows"><tr><td colspan="3" class="empty">No changes recorded yet.</td></tr></tbody>
+        </table>
+      </div>
+    </details>
+  </section>
 
   <section class="metrics">
     <div class="metric"><span>F&O stocks</span><strong id="universe">—</strong><small>Unique cash underlyings</small></div>
@@ -167,6 +178,6 @@
 <div class="chart-timeframes"><button data-tf="1" type="button">1m</button><button class="active" data-tf="5" type="button">5m</button><button data-tf="15" type="button">15m</button><button data-tf="60" type="button">1h</button></div>
 <div id="stockChart" class="stock-chart"></div><div id="chartMessage" class="chart-message">Loading candles and volume…</div>
 </section></div>
-<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=17"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script><script src="/static/app.js?v=18"></script>
 </body>
 </html>
