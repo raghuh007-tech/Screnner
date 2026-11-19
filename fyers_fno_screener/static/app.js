@@ -220,8 +220,10 @@ function renderTopGainerHistory(history) {
   if (!host) return;
   const events = (history || []).slice(0, 10);
   if (count) count.textContent = events.length ? `Last ${events.length} changes` : 'No changes yet';
+  const showPct = value => value == null || !Number.isFinite(Number(value))
+    ? '' : ` <small>(${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(2)}%)</small>`;
   host.innerHTML = events.length ? events.map(event =>
-    `<tr><td>${esc(event.time || '—')}</td><td class="history-added">${esc(event.added || '—')}</td><td class="history-removed">${esc(event.removed || '—')}</td></tr>`
+    `<tr><td>${esc(event.time || '—')}</td><td class="history-added">${esc(event.added || '—')}${showPct(event.added_change_pct)}</td><td class="history-removed">${esc(event.removed || '—')}${showPct(event.removed_change_pct)}</td></tr>`
   ).join('') : '<tr><td colspan="3" class="empty">No Top 10 changes recorded today.</td></tr>';
 }
 function renderMarketContext(context) {
