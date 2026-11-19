@@ -457,3 +457,21 @@ tbody tr:hover{background:#18283a}
 }
 
 .tag-ivf{background:#2c2854;color:#c8baff;border:1px solid #6253a6}.ivf-cell{font-weight:850;color:#c8baff}
+
+
+/* Compact Top 10 entry/exit audit */
+.gainer-history-panel{margin-top:7px}
+.gainer-history-panel details{padding:0}
+.gainer-history-panel summary{cursor:pointer;list-style:none;padding:10px 14px;font-size:11px;font-weight:800;color:#dce7f5;display:flex;justify-content:space-between;gap:10px}
+.gainer-history-panel summary::-webkit-details-marker{display:none}
+.gainer-history-panel summary:after{content:'+';color:var(--muted);font-size:14px}
+.gainer-history-panel details[open] summary:after{content:'−'}
+.gainer-history-panel summary span{font-size:9px;font-weight:500;color:var(--muted);margin-left:auto}
+.gainer-history-table th,.gainer-history-table td{padding:7px 10px}
+.gainer-history-table td:first-child{text-align:left;color:#aabbd0}
+.gainer-history-table .history-added{color:var(--green);font-weight:750}
+.gainer-history-table .history-removed{color:#ffbb82;font-weight:750}
+@media(max-width:760px){
+ .gainer-history-panel summary{padding:9px 10px;font-size:10px}
+ .gainer-history-table th,.gainer-history-table td{padding:7px 8px;font-size:9px}
+}

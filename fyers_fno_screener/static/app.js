@@ -214,6 +214,16 @@ function renderTopGainers(gainers) {
     : '<div class="empty">No positive F&O gainers available yet.</div>';
 }
 
+function renderTopGainerHistory(history) {
+  const host = $('gainerHistoryRows');
+  const count = $('gainerHistoryCount');
+  if (!host) return;
+  const events = (history || []).slice(0, 10);
+  if (count) count.textContent = events.length ? `Last ${events.length} changes` : 'No changes yet';
+  host.innerHTML = events.length ? events.map(event =>
+    `<tr><td>${esc(event.time || '—')}</td><td class="history-added">${esc(event.added || '—')}</td><td class="history-removed">${esc(event.removed || '—')}</td></tr>`
+  ).join('') : '<tr><td colspan="3" class="empty">No Top 10 changes recorded today.</td></tr>';
+}
 function renderMarketContext(context) {
   const nifty = context?.nifty50 || {};
   $('niftyPrice').textContent = fmt(nifty.price);
@@ -249,6 +259,7 @@ async function refresh() {
     latestScan = data;
     rows = data.rows || [];
     renderTopGainers(data.top_gainers || []);
+    renderTopGainerHistory(data.top_gainer_history || []);
     $('universe').textContent = fmt(data.universe,0);
     $('pdhCount').textContent = fmt(data.pd_breakouts,0);
     $('momentumCount').textContent = fmt(data.momentum_count,0);

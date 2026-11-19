@@ -355,6 +355,19 @@ def init_history_store():
                     symbols_json TEXT NOT NULL
                 )
             """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS top_gainer_change_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trade_date TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    added_symbol TEXT,
+                    removed_symbol TEXT
+                )
+            """)
+            db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_top_gainer_change_history_date
+                ON top_gainer_change_history(trade_date, id DESC)
+            """)
             # Retain compatibility with the legacy active-signal table.
             alert_rows = db.execute(
                 "SELECT kind, symbol FROM momentum_alert_active"
@@ -1295,7 +1308,8 @@ def mark_new_top_gainer_entries(gainers, now):
                         (trade_date, str(row['symbol']).upper(), now.isoformat(timespec='seconds'))
                     )
             else:
-                previous_symbols = set(json.loads(previous[0] or '[]'))
+                previous_order = [str(symbol).upper() for symbol in json.loads(previous[0] or '[]')]
+                previous_symbols = set(previous_order)
                 for row in gainers:
                     symbol = str(row['symbol']).upper()
                     if symbol not in previous_symbols:
@@ -1303,6 +1317,21 @@ def mark_new_top_gainer_entries(gainers, now):
                             "INSERT OR IGNORE INTO top_gainer_daily_state(trade_date,symbol,first_seen_at,is_new,alert_sent) VALUES (?,?,?,1,0)",
                             (trade_date, symbol, now.isoformat(timespec='seconds'))
                         )
+                added = [symbol for symbol in current_symbols if symbol not in previous_symbols]
+                current_set = set(current_symbols)
+                removed = [symbol for symbol in previous_order if symbol not in current_set]
+                if added or removed:
+                    changed_at = now.isoformat(timespec='seconds')
+                    event_count = max(len(added), len(removed))
+                    db.executemany(
+                        "INSERT INTO top_gainer_change_history(trade_date,changed_at,added_symbol,removed_symbol) VALUES (?,?,?,?)",
+                        [
+                            (trade_date, changed_at,
+                             added[index] if index < len(added) else None,
+                             removed[index] if index < len(removed) else None)
+                            for index in range(event_count)
+                        ]
+                    )
             db.execute(
                 "INSERT INTO top_gainer_snapshot(trade_date,symbols_json) VALUES (?,?) "
                 "ON CONFLICT(trade_date) DO UPDATE SET symbols_json=excluded.symbols_json",
@@ -1327,6 +1356,27 @@ def mark_new_top_gainer_entries(gainers, now):
         row['new_entry_confirmations'] = [{'label': label, 'passed': passed} for label, passed in checks]
         row['new_entry_confirmation_count'] = sum(1 for _, passed in checks if passed)
     return gainers
+
+
+def get_top_gainer_change_history(now=None, limit=10):
+    """Return the latest compact Top 10 entry/exit changes for the current IST day."""
+    trade_date = (now or datetime.now(IST)).astimezone(IST).date().isoformat()
+    with history_db_lock:
+        with _history_db_connect() as db:
+            rows = db.execute(
+                "SELECT changed_at, added_symbol, removed_symbol "
+                "FROM top_gainer_change_history WHERE trade_date=? "
+                "ORDER BY id DESC LIMIT ?",
+                (trade_date, max(1, min(int(limit), 50)))
+            ).fetchall()
+    return [
+        {
+            'time': datetime.fromisoformat(changed_at).astimezone(IST).strftime('%H:%M:%S'),
+            'added': added_symbol,
+            'removed': removed_symbol,
+        }
+        for changed_at, added_symbol, removed_symbol in rows
+    ]
 
 
 def send_new_top_gainer_alerts(gainers, now):
@@ -2182,6 +2232,7 @@ def scan():
         return jsonify({
             'rows': rows,
             'top_gainers': top_gainers,
+            'top_gainer_history': get_top_gainer_change_history(now),
             'coverage': len(quotes),
             'quote_volume_nonzero': sum(1 for quote in quotes.values() if quote.get('volume') not in (None, 0)),
             'universe': len(symbols),
