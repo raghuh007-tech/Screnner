@@ -364,6 +364,15 @@ def init_history_store():
                     removed_symbol TEXT
                 )
             """)
+            # Additive migrations keep existing persistent Render databases compatible.
+            history_columns = {row[1] for row in db.execute("PRAGMA table_info(top_gainer_change_history)")}
+            if 'added_change_pct' not in history_columns:
+                db.execute("ALTER TABLE top_gainer_change_history ADD COLUMN added_change_pct REAL")
+            if 'removed_change_pct' not in history_columns:
+                db.execute("ALTER TABLE top_gainer_change_history ADD COLUMN removed_change_pct REAL")
+            snapshot_columns = {row[1] for row in db.execute("PRAGMA table_info(top_gainer_snapshot)")}
+            if 'prices_json' not in snapshot_columns:
+                db.execute("ALTER TABLE top_gainer_snapshot ADD COLUMN prices_json TEXT")
             db.execute("""
                 CREATE INDEX IF NOT EXISTS idx_top_gainer_change_history_date
                 ON top_gainer_change_history(trade_date, id DESC)
@@ -1295,10 +1304,14 @@ def mark_new_top_gainer_entries(gainers, now):
     """Persist first-time Top 10 entries and retain NEW status for the full IST day."""
     trade_date = now.astimezone(IST).date().isoformat()
     current_symbols = [str(row['symbol']).upper() for row in gainers]
+    current_prices = {
+        str(row['symbol']).upper(): float(row['change_pct'])
+        for row in gainers if row.get('change_pct') is not None
+    }
     with history_db_lock:
         with _history_db_connect() as db:
             previous = db.execute(
-                "SELECT symbols_json FROM top_gainer_snapshot WHERE trade_date=?", (trade_date,)
+                "SELECT symbols_json, prices_json FROM top_gainer_snapshot WHERE trade_date=?", (trade_date,)
             ).fetchone()
             if previous is None:
                 # First scan is baseline; only later entrants receive NEW.
@@ -1309,6 +1322,11 @@ def mark_new_top_gainer_entries(gainers, now):
                     )
             else:
                 previous_order = [str(symbol).upper() for symbol in json.loads(previous[0] or '[]')]
+                try:
+                    previous_prices = json.loads(previous[1] or '{}') if len(previous) > 1 else {}
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    previous_prices = {}
+                previous_prices = {str(k).upper(): v for k, v in previous_prices.items()}
                 previous_symbols = set(previous_order)
                 for row in gainers:
                     symbol = str(row['symbol']).upper()
@@ -1324,18 +1342,20 @@ def mark_new_top_gainer_entries(gainers, now):
                     changed_at = now.isoformat(timespec='seconds')
                     event_count = max(len(added), len(removed))
                     db.executemany(
-                        "INSERT INTO top_gainer_change_history(trade_date,changed_at,added_symbol,removed_symbol) VALUES (?,?,?,?)",
+                        "INSERT INTO top_gainer_change_history(trade_date,changed_at,added_symbol,removed_symbol,added_change_pct,removed_change_pct) VALUES (?,?,?,?,?,?)",
                         [
                             (trade_date, changed_at,
                              added[index] if index < len(added) else None,
-                             removed[index] if index < len(removed) else None)
+                             removed[index] if index < len(removed) else None,
+                             current_prices.get(added[index]) if index < len(added) else None,
+                             previous_prices.get(removed[index]) if index < len(removed) else None)
                             for index in range(event_count)
                         ]
                     )
             db.execute(
-                "INSERT INTO top_gainer_snapshot(trade_date,symbols_json) VALUES (?,?) "
-                "ON CONFLICT(trade_date) DO UPDATE SET symbols_json=excluded.symbols_json",
-                (trade_date, json.dumps(current_symbols))
+                "INSERT INTO top_gainer_snapshot(trade_date,symbols_json,prices_json) VALUES (?,?,?) "
+                "ON CONFLICT(trade_date) DO UPDATE SET symbols_json=excluded.symbols_json, prices_json=excluded.prices_json",
+                (trade_date, json.dumps(current_symbols), json.dumps(current_prices))
             )
             states = {
                 symbol: (first_seen_at, bool(is_new))
@@ -1354,17 +1374,17 @@ def mark_new_top_gainer_entries(gainers, now):
             ('Near 52W high', bool(row.get('near_52w_high'))),
         ]
         row['new_entry_confirmations'] = [{'label': label, 'passed': passed} for label, passed in checks]
-        row['new_entry_confirmation_count'] = sum(1 for _, passed in checks if passed)
+        row['new_entry_confirmation_count'] = sum(1 for _, passed in checks)
     return gainers
 
 
 def get_top_gainer_change_history(now=None, limit=10):
-    """Return the latest compact Top 10 entry/exit changes for the current IST day."""
+    """Return the latest compact Top 10 entry/exit changes with captured price changes."""
     trade_date = (now or datetime.now(IST)).astimezone(IST).date().isoformat()
     with history_db_lock:
         with _history_db_connect() as db:
             rows = db.execute(
-                "SELECT changed_at, added_symbol, removed_symbol "
+                "SELECT changed_at, added_symbol, removed_symbol, added_change_pct, removed_change_pct "
                 "FROM top_gainer_change_history WHERE trade_date=? "
                 "ORDER BY id DESC LIMIT ?",
                 (trade_date, max(1, min(int(limit), 50)))
@@ -1374,8 +1394,10 @@ def get_top_gainer_change_history(now=None, limit=10):
             'time': datetime.fromisoformat(changed_at).astimezone(IST).strftime('%H:%M:%S'),
             'added': added_symbol,
             'removed': removed_symbol,
+            'added_change_pct': added_change_pct,
+            'removed_change_pct': removed_change_pct,
         }
-        for changed_at, added_symbol, removed_symbol in rows
+        for changed_at, added_symbol, removed_symbol, added_change_pct, removed_change_pct in rows
     ]
 
 
