@@ -16,19 +16,13 @@
 <div class="shell">
   <header>
     <div>
-      <div class="eyebrow">NSE · {{ broker_name|upper }} MARKET DATA</div>
+      <div class="eyebrow">NSE · ZERODHA MARKET DATA</div>
       <h1>Oldpal Dashboard</h1>
       <p class="sub">NSE F&O sentiment · Market pulse · Stock opportunities</p>
     </div>
     <div class="actions">
       <span id="status" class="status">Checking connection…</span>
-      <a class="connect" href="/connect-broker">Connect {{ broker_name }}</a>
-      {% if broker_name == 'Zerodha Kite' %}
-      <span id="fyersTestStatus" class="status offline">FYERS: checking…</span>
-      <a class="connect" href="/connect-fyers">Connect FYERS</a>
-      <button id="testFyersData" class="connect" type="button">Test FYERS Data</button>
-      <span id="fyersDataTest" class="status offline" aria-live="polite">Data test: not run</span>
-      {% endif %}
+      <a class="connect" href="/connect-broker">Connect Zerodha Kite</a>
       <form method="post" action="/logout"><button class="logout" type="submit">Lock</button></form>
     </div>
   </header>
