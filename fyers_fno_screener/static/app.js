@@ -33,73 +33,13 @@ function formatChange(value) {
   const n = Number(value);
   return `${n > 0 ? '+' : ''}${fmt(n)}%`;
 }
-async function runFyersDataTest() {
-  const button = $('testFyersData');
-  const output = $('fyersDataTest');
-  if (!button || !output) return;
-  button.disabled = true;
-  button.textContent = 'Testing…';
-  output.textContent = 'Checking 5 stocks…';
-  output.className = 'status offline';
-  try {
-    const response = await fetch('/api/fyers-test-data', {
-      method: 'POST',
-      credentials: 'same-origin'
-    });
-    const data = await response.json();
-    if (!response.ok || !data || !Array.isArray(data.quotes) || !Array.isArray(data.history)) {
-      throw new Error(data?.message || 'Unexpected test response.');
-    }
-    const quotePassed = Number(data.quote_passed || 0);
-    const historyPassed = Number(data.history_passed || 0);
-    const failedHistory = data.history.filter(item => !item.ok);
-    const failureText = failedHistory.map(item => {
-      const symbol = item.symbol.replace('NSE:', '').replace('-EQ', '');
-      const reason = item.message || `HTTP ${item.http_status || '—'} · API ${item.api_status || '—'} · code ${item.api_code ?? '—'}`;
-      return `${symbol}: ${reason}`;
-    });
-    output.textContent = `Quotes: ${quotePassed}/5 · History: ${historyPassed}/5` + (failureText.length ? ` · ${failureText.join(' | ')}` : '');
-    output.className = data.ok ? 'status online' : 'status offline';
-    const quoteDetails = data.quotes.map(item =>
-      `${item.symbol}: ${item.ok ? 'PASS' : 'FAIL'}${item.ltp != null ? ' @ ' + item.ltp : ''}`
-    );
-    const historyDetails = data.history.map(item =>
-      `${item.symbol}: ${item.ok ? 'PASS' : 'FAIL'}${item.candles ? ' (' + item.candles + ' candles)' : ''}`
-    );
-    output.title = [...quoteDetails, ...historyDetails, data.message || ''].join(' | ');
-  } catch (error) {
-    output.textContent = 'Data test failed';
-    output.title = error.message || 'Could not complete FYERS data test.';
-    output.className = 'status offline';
-  } finally {
-    button.disabled = false;
-    button.textContent = 'Test FYERS Data';
-  }
-}
-const fyersTestButton = $('testFyersData');
-if (fyersTestButton) fyersTestButton.addEventListener('click', runFyersDataTest);
-
-
-
 async function updateStatus() {
   try {
     const data = await api('/api/status');
-    const brokerName = data.broker === 'zerodha' ? 'Zerodha Kite' : 'FYERS';
-    const fyersIndicator = $('fyersTestStatus');
-    if (fyersIndicator) {
-      try {
-        const fyersData = await api('/api/fyers-test-status');
-        fyersIndicator.textContent = fyersData.connected ? 'FYERS: Connected' : 'FYERS: Not connected';
-        fyersIndicator.className = fyersData.connected ? 'status online' : 'status offline';
-      } catch (_) {
-        fyersIndicator.textContent = 'FYERS: Status unavailable';
-        fyersIndicator.className = 'status offline';
-      }
-    }
-    $('status').textContent = data.connected ? `${brokerName} connected` : `${brokerName} not connected`;
+    $('status').textContent = data.connected ? 'Zerodha Kite connected' : 'Zerodha Kite not connected';
     $('status').className = data.connected ? 'status online' : 'status offline';
     if (data.error) $('feed').textContent = data.error;
-    if (!data.connected) $('feed').textContent = `Waiting for ${brokerName} connection`;
+    if (!data.connected) $('feed').textContent = 'Waiting for Zerodha Kite connection';
     const storageNote = $('historyStorageText');
     if (storageNote) {
       if (data.history_cache_persistent_mount) {
