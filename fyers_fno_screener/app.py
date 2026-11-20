@@ -42,16 +42,12 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
 )
 
-BROKER_PROVIDER = 'zerodha'
-
 KITE_API_KEY = os.getenv('KITE_API_KEY', '').strip()
 KITE_API_SECRET = os.getenv('KITE_API_SECRET', '').strip()
 KITE_REDIRECT_URI = os.getenv('KITE_REDIRECT_URI', '').strip()
 TOKEN = os.getenv('KITE_ACCESS_TOKEN', '').strip()
 SCREENER_PASSWORD = os.getenv('SCREENER_PASSWORD', '').strip()
 KITE_ROOT = 'https://api.kite.trade'
-FYERS_ROOT = 'https://api-t1.fyers.in'
-FYERS_DATA_ROOT = FYERS_ROOT + '/data'
 IST = ZoneInfo('Asia/Kolkata')
 INDEX_NAMES = {'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50', 'SENSEX', 'BANKEX'}
 
@@ -414,7 +410,7 @@ def init_history_store():
                 cache['sector_updated_at'] = value
             elif key == 'sector_retry_after':
                 cache['sector_retry_after'] = value
-            elif BROKER_PROVIDER == 'zerodha' and key == 'broker_access_token' and not TOKEN:
+            elif key == 'broker_access_token' and not TOKEN:
                 # Keep the existing Zerodha token isolated for rollback/fallback.
                 globals()['TOKEN'] = value
 
@@ -1437,7 +1433,7 @@ def status():
     with lock:
         return jsonify({
             'connected': bool(KITE_API_KEY and TOKEN),
-            'broker': BROKER_PROVIDER,
+            'broker': 'zerodha',
             'symbols_loaded': len(cache['symbols']),
             'last_update': cache['last_scan'],
             'error': cache['last_error'],
@@ -1844,7 +1840,7 @@ def ivf_volume_method_comparison():
 def scan():
     try:
         if not TOKEN:
-            return jsonify({'error': f'Connect {BROKER_PROVIDER.upper()} to start the live scan.', 'rows': []}), 400
+            return jsonify({'error': 'Connect ZERODHA to start the live scan.', 'rows': []}), 400
         if not cache['symbols']:
             cache['symbols'] = get_symbol_universe()
         symbols = cache['symbols']
@@ -2249,7 +2245,7 @@ _backtest_restore_state()
 def backtest_test_history():
     """Read-only single-stock check of broker daily and 5-minute candle access."""
     if not TOKEN:
-        return jsonify({'ok': False, 'error': f'Connect {BROKER_PROVIDER.upper()} first.'}), 400
+        return jsonify({'ok': False, 'error': 'Connect ZERODHA first.'}), 400
     try:
         symbols = list(cache.get('symbols') or [])
         if not symbols:
@@ -2280,7 +2276,7 @@ def backtest_test_history():
             symbol, daily_summary['count'], intraday_summary['count'], ok
         )
         return jsonify({
-            'ok': ok, 'provider': BROKER_PROVIDER, 'symbol': symbol,
+            'ok': ok, 'provider': 'zerodha', 'symbol': symbol,
             'range_from': start.isoformat(), 'range_to': end.isoformat(),
             'daily': daily_summary, 'five_minute': intraday_summary,
             'message': 'Both candle intervals returned data.' if ok else 'One or both intervals returned no candles.',
@@ -2431,7 +2427,7 @@ def backtest_diagnostics():
 def backtest_start():
     global backtest_worker_running
     if not TOKEN:
-        return jsonify({'error': f'Connect {BROKER_PROVIDER.upper()} before starting historical collection.'}), 400
+        return jsonify({'error': 'Connect ZERODHA before starting historical collection.'}), 400
     try:
         if not cache['symbols']:
             cache['symbols'] = get_symbol_universe()
