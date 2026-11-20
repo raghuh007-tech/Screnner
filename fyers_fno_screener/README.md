@@ -14,52 +14,31 @@ A stock appears once. All matching signals are grouped in its row/card.
 ## Full-history ATH reference\n\nThe dashboard links to [Strota's full-history ATH screen](https://strota.in/screens/all-time-high-stocks). It reports split/bonus-adjusted record closing highs, using live LTP during market hours, and a 5% near-record band. It is an external cross-check, not an integrated feed. Strota's data hub lists machine-readable symbol and live-snapshot endpoints but does not currently document a machine-readable ATH-screen endpoint.\n\n## Data method
 
 - The universe is the unique stock underlyings in NSE F&O. Index underlyings are excluded.
-- Provider-specific instrument masters are translated into a common internal NSE cash-symbol format.
+- Zerodha's instrument master is used to build the NSE F&O cash-symbol universe.
 - Current volume is compared with average cumulative volume at the same time over the previous 20 trading sessions, based on 5-minute candles.
 - Previous-day high and the available five-year high are calculated from daily candles.
 - Historical baselines load in the background and populate progressively.
 - Market quotes are refreshed as snapshots every 20 seconds. This is not a tick-by-tick WebSocket feed.
 - Historical data is kept in process memory. A server restart clears it and triggers a fresh warm-up.
 
-## Broker selection
+## Broker connection
 
-Set `BROKER_PROVIDER` to exactly one of:
+Oldpal uses **Zerodha Kite only**. Configure these Render environment variables:
 
-- `zerodha` — first provider for the November 2026 rollout.
-- `fyers` — planned provider for the later switch.
-
-The dashboard, symbols, scan calculations and display remain the same. Switching provider requires adding the second provider's credentials in the host environment, changing `BROKER_PROVIDER`, and redeploying. Do not put API secrets or access tokens in GitHub.
-
-### Zerodha Kite
-
-Set these Render environment variables:
-
-- `BROKER_PROVIDER=zerodha`
 - `KITE_API_KEY`
 - `KITE_API_SECRET`
 - `KITE_REDIRECT_URI=https://fyers-fno-live-screener.onrender.com/callback`
 
-Create a Kite Connect app and register that exact HTTPS redirect URL. Then open the private dashboard and choose **Connect Zerodha Kite**. The server completes the request-token exchange; the API secret is never sent to the browser.
+Open the private dashboard and choose **Connect Zerodha Kite**. The server completes the request-token exchange; the API secret is never sent to the browser.
 
 **Important:** Zerodha's free Personal API tier does not include live or historical market data. The Kite Connect paid plan is required for this screener's quote and candle data. Kite access tokens expire daily, so reconnect after expiry.
-
-### FYERS (later provider)
-
-Set these Render environment variables when switching:
-
-- `BROKER_PROVIDER=fyers`
-- `FYERS_APP_ID`
-- `FYERS_APP_SECRET`
-- `FYERS_REDIRECT_URI=https://fyers-fno-live-screener.onrender.com/callback`
-
-Register the same redirect URL in the FYERS API app. The dashboard then uses the same common scanner calculations with FYERS quotes and candles.
 
 ## Common environment variables
 
 - `SCREENER_PASSWORD`: private dashboard password.
 - `FLASK_SECRET_KEY`: long random session-signing secret.
 - `COOKIE_SECURE=true`: enable secure cookies on HTTPS.
-- `KITE_ACCESS_TOKEN` / `FYERS_ACCESS_TOKEN`: optional initial token values; normally leave blank and authenticate from the dashboard.
+- `KITE_ACCESS_TOKEN`: optional initial token value; normally leave blank and authenticate from the dashboard.
 
 Use one Gunicorn worker because the current quote and history caches are in process memory:
 
