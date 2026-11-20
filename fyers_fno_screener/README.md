@@ -1,4 +1,4 @@
-# Oldpal Dashboard
+# Oldpal F&O Scanner
 
 A private, mobile-first dashboard for NSE stock F&O underlyings. It combines multiple scanner conditions into one duplicate-free list. It only reads market data and does not place orders.
 
@@ -85,3 +85,4 @@ Historical candles are stored in SQLite by symbol and timeframe.
 - Top sector is the strongest available mapped NSE sector index by daily percentage change.
 - Stock labels use the published Nifty 500 constituent Industry classification. F&O stocks not present in that classification are marked Other F&O. Classification is cached and refreshed monthly; failures are put on a 12-hour cooldown.
 - Additional opportunity: **5Y HIGH +2% + 3X** means LTP within 5% below the available five-year highest daily high, daily change at least +2%, and volume at least 3× the average cumulative volume at the same time over the previous 20 sessions. This is not a verified lifetime ATH condition.
+\n\n## Deployment identity\n\nThe Render service is named **Oldpal F&O Scanner**. Its existing public URL remains `https://fyers-fno-live-screener.onrender.com` because the Render URL slug was preserved during the rename. Keep the Zerodha Kite redirect URI set to `https://fyers-fno-live-screener.onrender.com/callback`. The Render service ID, persistent disk, and service root directory are unchanged.\n
