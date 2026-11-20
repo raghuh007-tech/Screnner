@@ -108,6 +108,9 @@
     <div class="footnote" id="coverage-note">Waiting for market data.</div>
   </section>
   <section class="panel backtest-panel" id="backtestPanel">
+    <details>
+      <summary style="cursor:pointer;font-weight:700">Backtesting V1 <span style="font-weight:400;color:var(--muted);margin-left:8px">Show / hide</span></summary>
+      <div style="padding-top:14px">
     <div class="panel-head">
       <div><h2>Backtesting V1</h2><p>Separate historical research · 218 F&O cash stocks · 6-month test window</p></div>
       <button id="startBacktest" class="connect" type="button">Start / Resume Data Collection</button>
@@ -138,8 +141,13 @@
     <div class="table-wrap" style="margin-top:12px">
       <table><thead><tr><th>Date / Stock</th><th>Entry</th><th>Stop</th><th>Exit</th><th>Qty</th><th>Net P&amp;L</th><th>Reason</th></tr></thead><tbody id="strategyTrades"><tr><td colspan="7" class="empty">No strategy results yet.</td></tr></tbody></table>
     </div>
+      </div>
+    </details>
   </section>
   <section class="panel backtest-panel" id="ivfV2Panel">
+    <details>
+      <summary style="cursor:pointer;font-weight:700">IVF Version 2 Backtest <span style="font-weight:400;color:var(--muted);margin-left:8px">Show / hide</span></summary>
+      <div style="padding-top:14px">
     <div class="panel-head"><div><h2>IVF Version 2 Backtest</h2><p>9:25 IVF ≥3× same-slot 20-session average · PDH mandatory · ₹2,50,000 per trade</p></div>
       <div class="backtest-actions"><a class="connect" href="/api/backtest/strategy/v2/download">Save JSON</a><button id="runStrategyV2" class="connect" type="button">Run IVF V2 Backtest</button></div></div>
     <p id="strategyV2Message" class="backtest-message">Separate from V1. Uses the existing stored historical candles.</p>
@@ -157,6 +165,8 @@
       <thead><tr><th>Date / Stock</th><th>Entry</th><th>Stop / Risk</th><th>Exit</th><th>Qty</th><th>IVF ×</th><th>Net P&amp;L</th><th>Reason</th></tr></thead>
       <tbody id="strategyV2Trades"><tr><td colspan="8" class="empty">No IVF V2 results yet.</td></tr></tbody>
     </table></div>
+      </div>
+    </details>
   </section>
   <section class="history-status">
     <span class="pulse"></span><span id="historyText">Historical baselines not loaded yet.</span>
