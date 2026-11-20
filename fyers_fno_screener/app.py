@@ -112,6 +112,24 @@ ivf_refresh_at = {}
 IVF_REFRESH_SECONDS = 60
 
 
+def trim_recent_intraday_sessions(candles, today=None, keep_sessions=21):
+    """Keep the latest 20 completed sessions plus today's candles for live volume rules."""
+    today = today or datetime.now(IST).date()
+    valid = []
+    session_dates = set()
+    for candle in candles or []:
+        try:
+            if not isinstance(candle, (list, tuple)) or len(candle) < 6:
+                continue
+            session_date = datetime.fromtimestamp(int(candle[0]), IST).date()
+            valid.append((session_date, candle))
+            session_dates.add(session_date)
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+    selected_dates = set(sorted(session_dates)[-keep_sessions:])
+    return [candle for session_date, candle in valid if session_date in selected_dates]
+
+
 def refresh_ivf_candidate_history(symbol):
     now = datetime.now(IST)
     with ivf_refresh_lock:
@@ -127,12 +145,7 @@ def refresh_ivf_candidate_history(symbol):
         with lock:
             existing = cache['intraday'].get(symbol, [])
             merged = merge_candles(existing, recent)
-            cutoff = today - timedelta(days=45)
-            merged = [
-                candle for candle in merged
-                if len(candle) >= 6
-                and datetime.fromtimestamp(int(candle[0]), IST).date() >= cutoff
-            ]
+            merged = trim_recent_intraday_sessions(merged, today=today)
             cache['intraday'][symbol] = merged
         save_history(symbol, '5m', merged, today.isoformat())
     except Exception as exc:
@@ -180,12 +193,7 @@ def refresh_chart_history(symbol):
         with lock:
             existing = cache['intraday'].get(symbol, [])
             merged = merge_candles(existing, recent)
-            cutoff = today - timedelta(days=45)
-            merged = [
-                candle for candle in merged
-                if len(candle) >= 6
-                and datetime.fromtimestamp(int(candle[0]), IST).date() >= cutoff
-            ]
+            merged = trim_recent_intraday_sessions(merged, today=today)
             cache['intraday'][symbol] = merged
         save_history(symbol, '5m', merged, today.isoformat())
     except Exception as exc:
@@ -360,7 +368,7 @@ def init_history_store():
             ).fetchall()
             rows = db.execute(
                 "SELECT symbol, timeframe, candles_json FROM candle_cache"
-            ).fetchall()
+            )
             meta_rows = db.execute(
                 "SELECT symbol, intraday_fetch_date, daily_fetch_date, retry_after, last_error FROM history_meta"
             ).fetchall()
@@ -379,15 +387,7 @@ def init_history_store():
             try:
                 candles = json.loads(candles_json)
                 if timeframe == '5m':
-                    cutoff = datetime.now(IST).date() - timedelta(days=45)
-                    trimmed = []
-                    for candle in candles:
-                        try:
-                            if len(candle) >= 6 and datetime.fromtimestamp(int(candle[0]), IST).date() >= cutoff:
-                                trimmed.append(candle)
-                        except (TypeError, ValueError, OverflowError, OSError):
-                            continue
-                    cache['intraday'][symbol] = trimmed
+                    cache['intraday'][symbol] = trim_recent_intraday_sessions(candles)
                 elif timeframe == '1d':
                     cache['daily'][symbol] = candles if isinstance(candles, dict) else summarize_daily_candles(candles)
             except (TypeError, ValueError, json.JSONDecodeError):
@@ -887,12 +887,11 @@ def warm_history_for_symbol(symbol):
         with lock:
             cache['daily'][symbol] = daily_summary
 
-    # Initial volume baseline: 45 days once. Later: fetch only the latest
-    # 5 calendar days and merge. This avoids downloading the same 45-day set
-    # every day for every stock.
+    # Keep only 20 prior sessions plus today. Fetch a wider initial calendar
+    # window to cover weekends/holidays, then trim by actual trading sessions.
     if not intraday_exists:
         intraday_start = today - timedelta(days=45)
-        app.logger.info('Initial 5m history backfill for %s: %s to %s', symbol, intraday_start, today)
+        app.logger.info('Initial 5m volume baseline for %s: %s to %s', symbol, intraday_start, today)
         intraday = fetch_history(symbol, '5', intraday_start.isoformat(), today.isoformat())
     elif meta.get('intraday_fetch_date') != today.isoformat():
         intraday_start = today - timedelta(days=5)
@@ -902,16 +901,8 @@ def warm_history_for_symbol(symbol):
     else:
         intraday = intraday_existing
 
-    # Retain only 45 calendar days of 5m candles in memory and persistent cache.
-    cutoff = today - timedelta(days=45)
-    trimmed_intraday = []
-    for candle in intraday:
-        try:
-            if len(candle) >= 6 and datetime.fromtimestamp(int(candle[0]), IST).date() >= cutoff:
-                trimmed_intraday.append(candle)
-        except (TypeError, ValueError, OverflowError, OSError):
-            continue
-    intraday = trimmed_intraday
+    # Retain exactly the recent session window needed by live volume filters.
+    intraday = trim_recent_intraday_sessions(intraday, today=today)
 
     if intraday is not intraday_existing:
         with lock:
@@ -995,10 +986,10 @@ def volume_ratio_for_time(candles, now=None):
 
 
 def intraday_volume_filter(candles, now=None):
-    """Compare the latest completed 5-minute candle with the same slot over 20 prior sessions."""
+    """Compare today's completed 09:15-09:20 candle with the same slot over 20 prior sessions."""
     now = now or datetime.now(IST)
-    if not candles:
-        return None, None, 0, None
+    if not candles or (now.hour, now.minute) < (9, 20):
+        return None, None, 0, 9 * 60 + 15
     sessions = {}
     for candle in candles:
         if len(candle) < 6:
@@ -1009,21 +1000,17 @@ def intraday_volume_filter(candles, now=None):
         except (TypeError, ValueError, OverflowError, OSError):
             continue
         sessions.setdefault(stamp.date(), {})[stamp.hour * 60 + stamp.minute] = volume
-    current_day = sessions.get(now.date(), {})
-    completed = [
-        (minute, volume) for minute, volume in current_day.items()
-        if minute + 5 <= now.hour * 60 + now.minute
-    ]
-    if not completed:
-        return None, None, 0, None
-    slot_minute, current_volume = max(completed, key=lambda item: item[0])
+    slot_minute = 9 * 60 + 15
+    current_volume = sessions.get(now.date(), {}).get(slot_minute)
+    if current_volume is None:
+        return None, None, 0, slot_minute
     prior_dates = sorted(day for day in sessions if day < now.date())[-20:]
     if len(prior_dates) < 20:
         return None, current_volume, len(prior_dates), slot_minute
     samples = [sessions[day][slot_minute] for day in prior_dates if slot_minute in sessions[day]]
-    if len(samples) < 15:
+    if len(samples) != 20:
         return None, current_volume, len(samples), slot_minute
-    average = sum(samples) / len(samples)
+    average = sum(samples) / 20.0
     ratio = current_volume / average if average > 0 else None
     return ratio, current_volume, len(samples), slot_minute
 
@@ -1918,9 +1905,14 @@ def chart_data(symbol):
     # The persistent daily history worker is intentionally once-per-day.
     # Refresh only the symbol whose chart is open, with a 45-second throttle.
     refresh_chart_history(canonical_symbol)
-    candles = cache['intraday'].get(canonical_symbol, [])
+    all_candles = cache['intraday'].get(canonical_symbol, [])
+    today = datetime.now(IST).date()
+    candles = [
+        c for c in all_candles
+        if len(c) >= 6 and datetime.fromtimestamp(int(c[0]), IST).date() == today
+    ]
     if not candles:
-        return jsonify({'candles': [], 'message': 'Intraday history is still loading. Please try again shortly.'})
+        return jsonify({'candles': [], 'message': "Today's intraday candles are still loading. Please try again shortly."})
     if interval in {'15', '60'}:
         step = int(interval); grouped = {}
         for c in candles:
