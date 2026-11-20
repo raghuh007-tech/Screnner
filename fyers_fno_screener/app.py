@@ -42,22 +42,12 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
 )
 
-BROKER_PROVIDER = os.getenv('BROKER_PROVIDER', 'zerodha').strip().lower()
-if BROKER_PROVIDER not in {'zerodha', 'fyers'}:
-    raise RuntimeError("BROKER_PROVIDER must be 'zerodha' or 'fyers'.")
+BROKER_PROVIDER = 'zerodha'
 
 KITE_API_KEY = os.getenv('KITE_API_KEY', '').strip()
 KITE_API_SECRET = os.getenv('KITE_API_SECRET', '').strip()
 KITE_REDIRECT_URI = os.getenv('KITE_REDIRECT_URI', '').strip()
-FYERS_APP_ID = os.getenv('FYERS_APP_ID', '').strip()
-FYERS_APP_SECRET = os.getenv('FYERS_APP_SECRET', '').strip()
-FYERS_REDIRECT_URI = os.getenv('FYERS_REDIRECT_URI', '').strip()
-
-APP_ID = KITE_API_KEY if BROKER_PROVIDER == 'zerodha' else FYERS_APP_ID
-APP_SECRET = KITE_API_SECRET if BROKER_PROVIDER == 'zerodha' else FYERS_APP_SECRET
-REDIRECT_URI = KITE_REDIRECT_URI if BROKER_PROVIDER == 'zerodha' else FYERS_REDIRECT_URI
-TOKEN = (os.getenv('KITE_ACCESS_TOKEN', '').strip() if BROKER_PROVIDER == 'zerodha'
-         else os.getenv('FYERS_ACCESS_TOKEN', '').strip())
+TOKEN = os.getenv('KITE_ACCESS_TOKEN', '').strip()
 SCREENER_PASSWORD = os.getenv('SCREENER_PASSWORD', '').strip()
 KITE_ROOT = 'https://api.kite.trade'
 FYERS_ROOT = 'https://api-t1.fyers.in'
@@ -381,6 +371,10 @@ def init_history_store():
             sector_rows = db.execute(
                 "SELECT symbol, sector FROM stock_sector_cache"
             ).fetchall()
+            # Remove old test-provider credentials. Keep the Zerodha token and all history.
+            db.execute(
+                "DELETE FROM app_meta WHERE meta_key IN ('fyers_access_token', 'fyers_test_access_token')"
+            )
             app_meta_rows = db.execute(
                 "SELECT meta_key, meta_value FROM app_meta"
             ).fetchall()
@@ -422,11 +416,6 @@ def init_history_store():
                 cache['sector_retry_after'] = value
             elif BROKER_PROVIDER == 'zerodha' and key == 'broker_access_token' and not TOKEN:
                 # Keep the existing Zerodha token isolated for rollback/fallback.
-                globals()['TOKEN'] = value
-            elif BROKER_PROVIDER == 'fyers' and key == 'fyers_access_token' and not TOKEN:
-                globals()['TOKEN'] = value
-            elif BROKER_PROVIDER == 'fyers' and key == 'fyers_test_access_token' and not TOKEN:
-                # Promote the separately validated FYERS market-data token on first switch.
                 globals()['TOKEN'] = value
 
         app.logger.info(
@@ -542,96 +531,33 @@ try:
 except Exception as history_store_error:
     app.logger.exception('Historical cache could not be initialised: %s', history_store_error)
 
-# FYERS Standard Data API limits: keep a safety margin below its published quota.
-_api_times = deque()
-_history_times = deque()
-_api_lock = threading.Lock()
-
-# Kite Connect documented limits: quote 1 request/second; historical 3 requests/second.
+# Kite Connect request pacing: quotes at most once per second; history at most 3/sec.
 _kite_rate_lock = threading.Lock()
 _kite_last_quote = 0.0
 _kite_history_times = deque()
 
 
 def api_slot(priority=False):
-    """Throttle provider calls within the active broker's documented limits."""
+    """Throttle Zerodha Kite requests within the conservative request limits."""
     global _kite_last_quote
-    if BROKER_PROVIDER == 'zerodha':
-        while True:
-            with _kite_rate_lock:
-                now = time.monotonic()
-                while _kite_history_times and now - _kite_history_times[0] >= 1:
-                    _kite_history_times.popleft()
-                if priority:
-                    wait = max(0.0, 1.05 - (now - _kite_last_quote))
-                    if wait <= 0:
-                        _kite_last_quote = now
-                        return
-                else:
-                    wait = max(0.0, 0.36 - (now - _kite_history_times[-1])) if _kite_history_times else 0.0
-                    if len(_kite_history_times) < 3 and wait <= 0:
-                        _kite_history_times.append(now)
-                        return
-                    if len(_kite_history_times) >= 3:
-                        wait = max(wait, 1.0 - (now - _kite_history_times[0]) + 0.02)
-            time.sleep(max(wait, 0.02))
-    else:
-        _fyers_api_slot(priority=priority)
-
-
-def _fyers_api_slot(priority=False):
-    """Serialize all FYERS data calls below 5 requests/second with rolling safety caps.
-
-    The FYERS test connection is separate from the active broker, so it must
-    use this same limiter even when Zerodha is the production provider.
-    """
     while True:
-        with _api_lock:
+        with _kite_rate_lock:
             now = time.monotonic()
-            while _api_times and now - _api_times[0] >= 60:
-                _api_times.popleft()
-            while _history_times and now - _history_times[0] >= 60:
-                _history_times.popleft()
-            total_ok = len(_api_times) < 44
-            history_ok = priority or len(_history_times) < 25
-            # 0.30s spacing gives a 3.3 req/s ceiling, safely below 5 req/s.
-            spacing_ok = not _api_times or now - _api_times[-1] >= 0.30
-            if total_ok and history_ok and spacing_ok:
-                _api_times.append(now)
-                if not priority:
-                    _history_times.append(now)
-                return
-            waits = [0.31]
-            if not total_ok and _api_times:
-                waits.append(60 - (now - _api_times[0]) + 0.05)
-            if not history_ok and _history_times:
-                waits.append(60 - (now - _history_times[0]) + 0.05)
-            wait = max(waits)
-        time.sleep(wait)
-
-
-def fyers_data_get(path, headers, params=None, timeout=25, priority=False):
-    """Make a throttled FYERS data request; retry one explicit rate-limit response."""
-    for attempt in range(2):
-        _fyers_api_slot(priority=priority)
-        response = requests.get(
-            FYERS_DATA_ROOT + path, headers=headers, params=params, timeout=timeout
-        )
-        rate_limited = response.status_code == 429
-        if not rate_limited and response.ok:
-            try:
-                payload = response.json()
-                message = str(payload.get('message') or payload.get('errmsg') or '').lower()
-                rate_limited = payload.get('s') == 'error' and (
-                    'rate' in message or 'request limit' in message or 'too many' in message
-                )
-            except (ValueError, AttributeError):
-                pass
-        if rate_limited and attempt == 0:
-            app.logger.warning('FYERS rate limit response for %s; retrying once after backoff.', path)
-            time.sleep(1.5)
-            continue
-        return response
+            while _kite_history_times and now - _kite_history_times[0] >= 1:
+                _kite_history_times.popleft()
+            if priority:
+                wait = max(0.0, 1.05 - (now - _kite_last_quote))
+                if wait <= 0:
+                    _kite_last_quote = now
+                    return
+            else:
+                wait = max(0.0, 0.36 - (now - _kite_history_times[-1])) if _kite_history_times else 0.0
+                if len(_kite_history_times) < 3 and wait <= 0:
+                    _kite_history_times.append(now)
+                    return
+                if len(_kite_history_times) >= 3:
+                    wait = max(wait, 1.0 - (now - _kite_history_times[0]) + 0.02)
+        time.sleep(max(wait, 0.02))
 
 
 def kite_headers():
@@ -644,35 +570,16 @@ def kite_headers():
     }
 
 
-def fyers_headers():
-    if not FYERS_APP_ID or not TOKEN:
-        raise RuntimeError('FYERS is not connected. Select Connect Broker and sign in.')
-    return {'Authorization': f'{FYERS_APP_ID}:{TOKEN}', 'Content-Type': 'application/json'}
-
-
 def broker_get(path, params=None, priority=False):
-    if BROKER_PROVIDER == 'zerodha':
-        api_slot(priority=priority)
-        response = requests.get(KITE_ROOT + path, headers=kite_headers(), params=params, timeout=30)
-        if response.status_code == 429:
-            raise RuntimeError('Kite Connect rate limit reached. The scanner will retry on its next refresh.')
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get('status') == 'error':
-            raise RuntimeError(payload.get('message') or str(payload))
-        return payload
-    response = fyers_data_get(
-        path, headers=fyers_headers(), params=params, timeout=25, priority=priority
-    )
+    api_slot(priority=priority)
+    response = requests.get(KITE_ROOT + path, headers=kite_headers(), params=params, timeout=30)
     if response.status_code == 429:
-        raise RuntimeError('FYERS data API rate limit reached. The scanner will retry on its next refresh.')
+        raise RuntimeError('Kite Connect rate limit reached. The scanner will retry on its next refresh.')
     response.raise_for_status()
     payload = response.json()
-    if payload.get('s') == 'error':
+    if payload.get('status') == 'error':
         raise RuntimeError(payload.get('message') or str(payload))
     return payload
-
-
 
 
 def _sector_symbol_key(value):
@@ -681,8 +588,6 @@ def _sector_symbol_key(value):
 
 def refresh_stock_sectors(symbols):
     """Refresh broad sector labels from Nifty 500's published constituent classification."""
-    if BROKER_PROVIDER != 'zerodha':
-        return
     updated_at = cache.get('sector_updated_at')
     retry_after = cache.get('sector_retry_after')
     if retry_after:
@@ -771,131 +676,68 @@ def _normalise_symbol(name):
 
 
 def get_symbol_universe():
-    """Return the unique stock F&O underlyings in a broker-neutral NSE:SYMBOL-EQ format."""
-    if BROKER_PROVIDER == 'zerodha':
-        response = requests.get(KITE_ROOT + '/instruments', headers=kite_headers(), timeout=60)
-        response.raise_for_status()
-        rows = list(csv.DictReader(io.StringIO(response.text)))
-        cash_rows = [
-            row for row in rows
-            if row.get('exchange') == 'NSE'
-            and row.get('segment') == 'NSE'
-            and row.get('instrument_type') == 'EQ'
-        ]
-        cash_by_name = {}
-        cash_symbols = set()
-        for row in cash_rows:
-            symbol = row.get('tradingsymbol', '').strip().upper()
-            name = row.get('name', '').strip().upper()
-            if symbol:
-                cash_symbols.add(symbol)
-                if name:
-                    cash_by_name[name] = symbol
-        # Some instrument-master rows have a blank company name. Fall back to
-        # matching the longest NSE cash ticker at the start of the futures symbol.
-        sorted_cash = sorted(cash_symbols, key=len, reverse=True)
-        underlyings = set()
-        for row in rows:
-            if row.get('exchange') != 'NFO' or row.get('segment') != 'NFO-FUT' or row.get('instrument_type') != 'FUT':
-                continue
-            name = row.get('name', '').strip().upper()
-            symbol = cash_by_name.get(name)
-            if not symbol:
-                future_symbol = row.get('tradingsymbol', '').strip().upper()
-                symbol = next((candidate for candidate in sorted_cash if future_symbol.startswith(candidate)), None)
-            if symbol and symbol not in INDEX_NAMES:
-                underlyings.add(symbol)
-
-        token_map = {
-            row['tradingsymbol'].strip().upper(): int(row['instrument_token'])
-            for row in cash_rows
-            if row.get('tradingsymbol') and row.get('instrument_token')
-        }
-        index_names = {
-            row.get('tradingsymbol', '').strip().upper()
-            for row in rows
-            if row.get('exchange') == 'NSE' and row.get('segment') == 'INDICES'
-            and row.get('tradingsymbol')
-        }
-        sector_indices = {
-            f'NSE:{name}': SECTOR_INDEX_LABELS[name]
-            for name in index_names if name in SECTOR_INDEX_LABELS
-        }
-        if 'NIFTY 50' in index_names:
-            market_index_symbols = ['NSE:NIFTY 50'] + sorted(sector_indices)
-        else:
-            market_index_symbols = sorted(sector_indices)
-        with lock:
-            cache['market_index_symbols'] = market_index_symbols
-            cache['sector_index_labels'] = sector_indices
-            cache['instrument_tokens'] = {
-                _normalise_symbol(symbol): token_map[symbol]
-                for symbol in underlyings if symbol in token_map
-            }
-        return sorted(_normalise_symbol(symbol) for symbol in underlyings if symbol in token_map)
-
-    # FYERS instrument masters are public CSVs. Keep the same canonical
-    # broker-neutral symbol shape used by the rest of the scanner.
-    fo_response = requests.get('https://public.fyers.in/sym_details/NSE_FO.csv', timeout=30)
-    fo_response.raise_for_status()
-    cm_response = requests.get('https://public.fyers.in/sym_details/NSE_CM.csv', timeout=30)
-    cm_response.raise_for_status()
-    fo_rows = list(csv.reader(io.StringIO(fo_response.text)))
-    cm_rows = list(csv.reader(io.StringIO(cm_response.text)))
-    if not fo_rows or not cm_rows:
-        return []
-    fo_header = [cell.strip().lower() for cell in fo_rows[0]]
-    cm_header = [cell.strip().lower() for cell in cm_rows[0]]
-    fo_has_header = any('underlying symbol' in cell for cell in fo_header)
-    cm_has_header = any('symbol ticker' in cell for cell in cm_header)
-    fo_data = fo_rows[1:] if fo_has_header else fo_rows
-    cm_data = cm_rows[1:] if cm_has_header else cm_rows
-    underlying_idx = next((i for i, h in enumerate(fo_header) if 'underlying symbol' in h), 13) if fo_has_header else 13
-    ticker_idx = next((i for i, h in enumerate(cm_header) if 'symbol ticker' in h), 9) if cm_has_header else 9
-    cash_symbols = {
-        row[ticker_idx].strip().upper()
-        for row in cm_data
-        if len(row) > ticker_idx and row[ticker_idx].strip().upper().startswith('NSE:')
-        and row[ticker_idx].strip().upper().endswith('-EQ')
-    }
-    # FYERS index symbols are compact (for example NSE:NIFTY50-INDEX),
-    # unlike the spaced Kite index names.
-    fyers_index_symbols = {
-        row[ticker_idx].strip().upper()
-        for row in cm_data
-        if len(row) > ticker_idx and row[ticker_idx].strip().upper().startswith('NSE:')
-        and row[ticker_idx].strip().upper().endswith('-INDEX')
-    }
-    def compact_index_name(symbol):
-        return symbol.removeprefix('NSE:').removesuffix('-INDEX').replace(' ', '').replace('&', '').replace('-', '')
-    wanted_indices = {'NIFTY50': ('NIFTY 50', 'Nifty 50')}
-    wanted_indices.update({
-        key.replace(' ', '').replace('&', '').replace('-', ''): (key, label)
-        for key, label in SECTOR_INDEX_LABELS.items()
-    })
-    market_symbols, sector_labels = [], {}
-    for symbol in sorted(fyers_index_symbols):
-        match = wanted_indices.get(compact_index_name(symbol))
-        if not match:
+    """Return Zerodha's F&O cash underlyings in canonical NSE:SYMBOL-EQ format."""
+    response = requests.get(KITE_ROOT + '/instruments', headers=kite_headers(), timeout=60)
+    response.raise_for_status()
+    rows = list(csv.DictReader(io.StringIO(response.text)))
+    cash_rows = [
+        row for row in rows
+        if row.get('exchange') == 'NSE'
+        and row.get('segment') == 'NSE'
+        and row.get('instrument_type') == 'EQ'
+    ]
+    cash_by_name = {}
+    cash_symbols = set()
+    for row in cash_rows:
+        symbol = row.get('tradingsymbol', '').strip().upper()
+        name = row.get('name', '').strip().upper()
+        if symbol:
+            cash_symbols.add(symbol)
+            if name:
+                cash_by_name[name] = symbol
+    # Some instrument-master rows have a blank company name. Fall back to
+    # matching the longest NSE cash ticker at the start of the futures symbol.
+    sorted_cash = sorted(cash_symbols, key=len, reverse=True)
+    underlyings = set()
+    for row in rows:
+        if row.get('exchange') != 'NFO' or row.get('segment') != 'NFO-FUT' or row.get('instrument_type') != 'FUT':
             continue
-        label_key, label = match
-        market_symbols.append(symbol)
-        if label_key != 'NIFTY 50':
-            sector_labels[symbol] = label
+        name = row.get('name', '').strip().upper()
+        symbol = cash_by_name.get(name)
+        if not symbol:
+            future_symbol = row.get('tradingsymbol', '').strip().upper()
+            symbol = next((candidate for candidate in sorted_cash if future_symbol.startswith(candidate)), None)
+        if symbol and symbol not in INDEX_NAMES:
+            underlyings.add(symbol)
+
+    token_map = {
+        row['tradingsymbol'].strip().upper(): int(row['instrument_token'])
+        for row in cash_rows
+        if row.get('tradingsymbol') and row.get('instrument_token')
+    }
+    index_names = {
+        row.get('tradingsymbol', '').strip().upper()
+        for row in rows
+        if row.get('exchange') == 'NSE' and row.get('segment') == 'INDICES'
+        and row.get('tradingsymbol')
+    }
+    sector_indices = {
+        f'NSE:{name}': SECTOR_INDEX_LABELS[name]
+        for name in index_names if name in SECTOR_INDEX_LABELS
+    }
+    if 'NIFTY 50' in index_names:
+        market_index_symbols = ['NSE:NIFTY 50'] + sorted(sector_indices)
+    else:
+        market_index_symbols = sorted(sector_indices)
     with lock:
-        cache['market_index_symbols'] = market_symbols
-        cache['sector_index_labels'] = sector_labels
-    app.logger.info('FYERS index symbols discovered: %d; sector indices: %d',
-                    len(market_symbols), len(sector_labels))
-    result = set()
-    for row in fo_data:
-        if len(row) <= underlying_idx:
-            continue
-        name = row[underlying_idx].strip().upper()
-        candidate = _normalise_symbol(name)
-        if name and name not in INDEX_NAMES and candidate in cash_symbols:
-            result.add(candidate)
-    return sorted(result)
+        cache['market_index_symbols'] = market_index_symbols
+        cache['sector_index_labels'] = sector_indices
+        cache['instrument_tokens'] = {
+            _normalise_symbol(symbol): token_map[symbol]
+            for symbol in underlyings if symbol in token_map
+        }
+    return sorted(_normalise_symbol(symbol) for symbol in underlyings if symbol in token_map)
+
 
 
 def _normalise_kite_quote(symbol, item):
@@ -920,38 +762,23 @@ def _normalise_kite_quote(symbol, item):
 
 
 def refresh_quotes(symbols):
-    """Fetch stock and index snapshots together, then keep their caches separate."""
+    """Fetch Zerodha stock and index snapshots together."""
     result = {}
     market_result = {}
-    if BROKER_PROVIDER == 'zerodha':
-        kite_symbols = [symbol.replace('-EQ', '') for symbol in symbols]
-        with lock:
-            market_symbols = list(cache.get('market_index_symbols', []))
-        requested = kite_symbols + market_symbols
-        for start in range(0, len(requested), 500):
-            batch = requested[start:start + 500]
-            params = [('i', symbol) for symbol in batch]
-            payload = broker_get('/quote', params=params, priority=True)
-            for key, item in (payload.get('data') or {}).items():
-                normalized = _normalise_kite_quote(key, item)
-                if key in market_symbols:
-                    market_result[key] = normalized
-                else:
-                    result[key + '-EQ'] = normalized
-    else:
-        with lock:
-            market_symbols = list(cache.get('market_index_symbols', []))
-        requested = list(symbols) + market_symbols
-        for start in range(0, len(requested), 50):
-            batch = requested[start:start + 50]
-            payload = broker_get('/quotes', {'symbols': ','.join(batch)}, priority=True)
-            for item in payload.get('d', []):
-                if item.get('s') == 'ok':
-                    symbol = item.get('n', '')
-                    if symbol in market_symbols:
-                        market_result[symbol] = item.get('v', {})
-                    else:
-                        result[symbol] = item.get('v', {})
+    kite_symbols = [symbol.replace('-EQ', '') for symbol in symbols]
+    with lock:
+        market_symbols = list(cache.get('market_index_symbols', []))
+    requested = kite_symbols + market_symbols
+    for start in range(0, len(requested), 500):
+        batch = requested[start:start + 500]
+        params = [('i', symbol) for symbol in batch]
+        payload = broker_get('/quote', params=params, priority=True)
+        for key, item in (payload.get('data') or {}).items():
+            normalized = _normalise_kite_quote(key, item)
+            if key in market_symbols:
+                market_result[key] = normalized
+            else:
+                result[key + '-EQ'] = normalized
     with lock:
         cache['quotes'].update(result)
         cache['market_quotes'] = market_result
@@ -1009,33 +836,23 @@ def _kite_timestamp_epoch(value):
 
 
 def fetch_history(symbol, resolution, start_date, end_date):
-    if BROKER_PROVIDER == 'zerodha':
-        with lock:
-            instrument_token = cache['instrument_tokens'].get(symbol)
-        if not instrument_token:
-            raise RuntimeError(f'Kite instrument token unavailable for {symbol}. Refresh the F&O instrument master.')
-        interval = {'5': '5minute', 'D': 'day'}.get(str(resolution), str(resolution))
-        params = {
-            'from': f'{start_date} 00:00:00',
-            'to': f'{end_date} 23:59:59',
-            'oi': 0,
-        }
-        payload = broker_get(f'/instruments/historical/{instrument_token}/{interval}', params=params)
-        candles = ((payload.get('data') or {}).get('candles') or [])
-        normalised = []
-        for candle in candles:
-            if len(candle) >= 6:
-                normalised.append([_kite_timestamp_epoch(str(candle[0]))] + list(candle[1:6]))
-        return normalised
-
-    payload = broker_get('/history', {
-        'symbol': symbol,
-        'resolution': resolution,
-        'date_format': '1',
-        'range_from': start_date,
-        'range_to': end_date,
-    })
-    return payload.get('candles', [])
+    with lock:
+        instrument_token = cache['instrument_tokens'].get(symbol)
+    if not instrument_token:
+        raise RuntimeError(f'Kite instrument token unavailable for {symbol}. Refresh the F&O instrument master.')
+    interval = {'5': '5minute', 'D': 'day'}.get(str(resolution), str(resolution))
+    params = {
+        'from': f'{start_date} 00:00:00',
+        'to': f'{end_date} 23:59:59',
+        'oi': 0,
+    }
+    payload = broker_get(f'/instruments/historical/{instrument_token}/{interval}', params=params)
+    candles = ((payload.get('data') or {}).get('candles') or [])
+    normalised = []
+    for candle in candles:
+        if len(candle) >= 6:
+            normalised.append([_kite_timestamp_epoch(str(candle[0]))] + list(candle[1:6]))
+    return normalised
 
 
 def date_chunks(start: date, end: date, days=366):
@@ -1552,110 +1369,58 @@ def logout():
 
 @app.route('/')
 def home():
-    return render_template('index.html', broker_name=('Zerodha Kite' if BROKER_PROVIDER == 'zerodha' else 'FYERS'))
+    return render_template('index.html', broker_name='Zerodha Kite')
 
 
 @app.route('/connect-broker')
 def connect_broker():
-    """Start OAuth for the selected broker; the browser never receives the app secret."""
-    if not APP_ID or not APP_SECRET or not REDIRECT_URI:
-        return f'Set the {BROKER_PROVIDER.upper()} API key, API secret and redirect URL in the server environment.', 400
+    """Start Zerodha Kite OAuth; the browser never receives the API secret."""
+    if not KITE_API_KEY or not KITE_API_SECRET or not KITE_REDIRECT_URI:
+        return 'Set KITE_API_KEY, KITE_API_SECRET and KITE_REDIRECT_URI in the server environment.', 400
     state = secrets.token_urlsafe(24)
     session['broker_oauth_state'] = state
-    if BROKER_PROVIDER == 'zerodha':
-        params = {
-            'v': '3',
-            'api_key': KITE_API_KEY,
-            'redirect_params': urlencode({'state': state}),
-        }
-        return redirect('https://kite.zerodha.com/connect/login?' + urlencode(params))
-    params = {'client_id': FYERS_APP_ID, 'redirect_uri': FYERS_REDIRECT_URI, 'response_type': 'code', 'state': state}
-    return redirect('https://api-t1.fyers.in/api/v3/generate-authcode?' + urlencode(params))
-
-
-@app.route('/connect-fyers')
-def connect_fyers_test():
-    """Authenticate FYERS separately without changing the active Zerodha feed."""
-    if not FYERS_APP_ID or not FYERS_APP_SECRET or not FYERS_REDIRECT_URI:
-        return 'Set FYERS_APP_ID, FYERS_APP_SECRET and FYERS_REDIRECT_URI in the server environment.', 400
-    state = secrets.token_urlsafe(24)
-    session['fyers_test_oauth_state'] = state
     params = {
-        'client_id': FYERS_APP_ID,
-        'redirect_uri': FYERS_REDIRECT_URI,
-        'response_type': 'code',
-        'state': state,
+        'v': '3',
+        'api_key': KITE_API_KEY,
+        'redirect_params': urlencode({'state': state}),
     }
-    return redirect('https://api-t1.fyers.in/api/v3/generate-authcode?' + urlencode(params))
+    return redirect('https://kite.zerodha.com/connect/login?' + urlencode(params))
 
 
 @app.route('/callback')
 def callback():
     global TOKEN
     state = request.args.get('state')
-    fyers_test_state = session.pop('fyers_test_oauth_state', None)
-    if fyers_test_state and secrets.compare_digest(state or '', fyers_test_state):
-        auth_code = request.args.get('auth_code')
-        if not auth_code:
-            return 'FYERS did not return an auth_code. Restart FYERS connection.', 400
-        app_hash = hashlib.sha256(f'{FYERS_APP_ID}:{FYERS_APP_SECRET}'.encode()).hexdigest()
-        response = requests.post(FYERS_ROOT + '/api/v3/validate-authcode', json={
-            'grant_type': 'authorization_code', 'appIdHash': app_hash, 'code': auth_code
-        }, timeout=25)
-        data = response.json()
-        if response.status_code >= 400 or data.get('s') != 'ok' or not data.get('access_token'):
-            return f"FYERS token exchange failed: {data.get('message', 'Unknown error')}", 400
-        with history_db_lock:
-            with _history_db_connect() as db:
-                db.execute(
-                    "INSERT INTO app_meta (meta_key, meta_value) VALUES (?, ?) "
-                    "ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value",
-                    ('fyers_test_access_token', data['access_token']),
-                )
-        return redirect(url_for('home') + '?fyers_connected=1')
-
     expected = session.pop('broker_oauth_state', None)
     if not expected or not secrets.compare_digest(state or '', expected):
-        return 'Broker login failed: missing or invalid OAuth state. Return to the private dashboard and reconnect.', 400
+        return 'Zerodha login failed: missing or invalid OAuth state. Return to the private dashboard and reconnect.', 400
 
-    if BROKER_PROVIDER == 'zerodha':
-        request_token = request.args.get('request_token')
-        if not request_token:
-            return 'Zerodha did not return a request_token. Restart the broker login.', 400
-        checksum = hashlib.sha256(f'{KITE_API_KEY}{request_token}{KITE_API_SECRET}'.encode()).hexdigest()
-        response = requests.post(
-            KITE_ROOT + '/session/token',
-            data={'api_key': KITE_API_KEY, 'request_token': request_token, 'checksum': checksum},
-            headers={'X-Kite-Version': '3'},
-            timeout=25,
-        )
-        data = response.json()
-        if response.status_code >= 400 or data.get('status') != 'success':
-            return f"Zerodha token exchange failed: {data.get('message', 'Unknown error')}", 400
-        TOKEN = (data.get('data') or {}).get('access_token', '')
-        if not TOKEN:
-            return 'Zerodha did not return an access token.', 400
-    else:
-        auth_code = request.args.get('auth_code')
-        if not auth_code:
-            return 'FYERS did not return an auth_code. Restart broker login.', 400
-        app_hash = hashlib.sha256(f'{FYERS_APP_ID}:{FYERS_APP_SECRET}'.encode()).hexdigest()
-        response = requests.post(FYERS_ROOT + '/api/v3/validate-authcode', json={
-            'grant_type': 'authorization_code', 'appIdHash': app_hash, 'code': auth_code
-        }, timeout=25)
-        data = response.json()
-        if response.status_code >= 400 or data.get('s') != 'ok' or not data.get('access_token'):
-            return f"FYERS token exchange failed: {data.get('message', 'Unknown error')}", 400
-        TOKEN = data['access_token']
+    request_token = request.args.get('request_token')
+    if not request_token:
+        return 'Zerodha did not return a request_token. Restart the broker login.', 400
 
-    # Persist the broker token on the mounted Render disk so daily suspend/resume
+    checksum = hashlib.sha256(f'{KITE_API_KEY}{request_token}{KITE_API_SECRET}'.encode()).hexdigest()
+    response = requests.post(
+        KITE_ROOT + '/session/token',
+        data={'api_key': KITE_API_KEY, 'request_token': request_token, 'checksum': checksum},
+        headers={'X-Kite-Version': '3'},
+        timeout=25,
+    )
+    data = response.json()
+    if response.status_code >= 400 or data.get('status') != 'success':
+        return f"Zerodha token exchange failed: {data.get('message', 'Unknown error')}", 400
+    TOKEN = (data.get('data') or {}).get('access_token', '')
+    if not TOKEN:
+        return 'Zerodha did not return an access token.', 400
+
+    # Persist the Zerodha token on the mounted Render disk so daily suspend/resume
     # does not force a fresh broker login. The database is private to this service.
     with history_db_lock:
         with _history_db_connect() as db:
             db.execute(
                 "INSERT INTO app_meta (meta_key, meta_value) VALUES (?, ?) "
                 "ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value",
-                ('broker_access_token' if BROKER_PROVIDER == 'zerodha' else 'fyers_access_token', TOKEN),
+                ('broker_access_token', TOKEN),
             )
 
     cache['connected'] = True
@@ -1667,128 +1432,11 @@ def callback():
     return redirect(url_for('home'))
 
 
-
-
-@app.route('/api/fyers-test-status')
-def fyers_test_status():
-    """Report whether the separate FYERS test token was saved; never expose the token."""
-    try:
-        with history_db_lock:
-            with _history_db_connect() as db:
-                row = db.execute(
-                    "SELECT 1 FROM app_meta WHERE meta_key = 'fyers_test_access_token' AND length(meta_value) > 0"
-                ).fetchone()
-        return jsonify({'connected': bool(row)})
-    except Exception as exc:
-        app.logger.warning('Could not read separate FYERS test status: %s', exc)
-        return jsonify({'connected': False, 'error': 'Could not verify FYERS token storage.'}), 500
-
-
-@app.route('/api/fyers-test-data', methods=['POST'])
-def fyers_test_data():
-    """Run a small, sequential FYERS quote and 5-minute history smoke test."""
-    try:
-        with history_db_lock:
-            with _history_db_connect() as db:
-                row = db.execute(
-                    "SELECT meta_value FROM app_meta WHERE meta_key = 'fyers_test_access_token'"
-                ).fetchone()
-        if not row or not row[0]:
-            return jsonify({'ok': False, 'message': 'FYERS is not authenticated yet.'}), 400
-
-        headers = {
-            'Authorization': f'{FYERS_APP_ID}:{row[0]}',
-            'Content-Type': 'application/json',
-        }
-        symbols = [
-            'NSE:RELIANCE-EQ',
-            'NSE:HDFCBANK-EQ',
-            'NSE:ICICIBANK-EQ',
-            'NSE:INFY-EQ',
-            'NSE:SBIN-EQ',
-        ]
-        result = {'quotes': [], 'history': []}
-        quote_response = fyers_data_get(
-            '/quotes', headers=headers,
-            params={'symbols': ','.join(symbols)},
-            timeout=20, priority=True,
-        )
-        quote_data = quote_response.json()
-        quote_items = {
-            item.get('n'): item.get('v') or {}
-            for item in quote_data.get('d', [])
-            if item.get('s') == 'ok'
-        }
-        for symbol in symbols:
-            values = quote_items.get(symbol) or {}
-            result['quotes'].append({
-                'symbol': symbol,
-                'ok': bool(quote_response.ok and values.get('lp') is not None),
-                'ltp': values.get('lp'),
-                'change_pct': values.get('chp'),
-            })
-
-        end_date = datetime.now(IST).date() - timedelta(days=1)
-        start_date = end_date - timedelta(days=5)
-        for symbol in symbols:
-            try:
-                history_response = fyers_data_get(
-                    '/history',
-                    headers=headers,
-                    params={
-                        'symbol': symbol,
-                        'resolution': '5',
-                        'date_format': '1',
-                        'range_from': start_date.isoformat(),
-                        'range_to': end_date.isoformat(),
-                        'cont_flag': '0',
-                    },
-                    timeout=20, priority=False,
-                )
-                history_data = history_response.json()
-                candles = history_data.get('candles') or []
-                history_ok = bool(
-                    history_response.ok and history_data.get('s') == 'ok' and candles
-                )
-                result['history'].append({
-                    'symbol': symbol,
-                    'ok': history_ok,
-                    'candles': len(candles) if history_ok else 0,
-                    'http_status': history_response.status_code,
-                    'api_status': history_data.get('s'),
-                    'api_code': history_data.get('code'),
-                    'message': '' if history_ok else str(
-                        history_data.get('message') or history_data.get('errmsg') or
-                        ('No candles returned' if not candles else 'FYERS history request failed')
-                    )[:180],
-                })
-            except Exception as exc:
-                result['history'].append({
-                    'symbol': symbol, 'ok': False, 'candles': 0,
-                    'message': str(exc)[:180],
-                })
-
-        result['quote_passed'] = sum(1 for item in result['quotes'] if item['ok'])
-        result['history_passed'] = sum(1 for item in result['history'] if item['ok'])
-        result['ok'] = (
-            result['quote_passed'] == len(symbols)
-            and result['history_passed'] == len(symbols)
-        )
-        result['message'] = (
-            'All five FYERS quote and history checks passed.'
-            if result['ok'] else 'Some FYERS symbol checks failed; see per-symbol results.'
-        )
-        return jsonify(result)
-    except Exception as exc:
-        app.logger.warning('FYERS test-data check failed: %s', exc)
-        return jsonify({'ok': False, 'message': 'FYERS test failed. Check server logs for details.'}), 502
-
-
 @app.route('/api/status')
 def status():
     with lock:
         return jsonify({
-            'connected': bool(APP_ID and TOKEN),
+            'connected': bool(KITE_API_KEY and TOKEN),
             'broker': BROKER_PROVIDER,
             'symbols_loaded': len(cache['symbols']),
             'last_update': cache['last_scan'],
@@ -2602,8 +2250,6 @@ def backtest_test_history():
     """Read-only single-stock check of broker daily and 5-minute candle access."""
     if not TOKEN:
         return jsonify({'ok': False, 'error': f'Connect {BROKER_PROVIDER.upper()} first.'}), 400
-    if BROKER_PROVIDER != 'zerodha':
-        return jsonify({'ok': False, 'error': 'This diagnostic is intended for the active Zerodha connection.'}), 400
     try:
         symbols = list(cache.get('symbols') or [])
         if not symbols:
@@ -2800,8 +2446,8 @@ def backtest_start():
         trade_end = today - timedelta(days=1)
         trade_start = trade_end - timedelta(days=BACKTEST_DAYS - 1)
 
-        # Remove obsolete failures from older collection windows (for example,
-        # FYERS 401 errors) before resuming the current provider's collection.
+        # Remove obsolete failures from older collection windows before resuming
+        # the current Zerodha collection.
         # This only prunes error metadata; saved candle and completed-chunk data
         # are never deleted.
         daily_start = trade_start - timedelta(days=366)
