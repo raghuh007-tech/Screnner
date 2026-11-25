@@ -296,7 +296,9 @@ def main():
             continue
         try:
             # Keep fetching after index removal so an open position can still exit.
-            daily = fetch_daily(kite, token, lo - timedelta(days=250), end)
+            if token not in price_by_token:
+                price_by_token[token] = fetch_daily(kite, token, start - timedelta(days=250), end)
+            daily = price_by_token[token]
             if daily.empty or len(daily) < 30:
                 coverage.append({"symbol": symbol, "token": token, "status": "INSUFFICIENT_DATA", "rows": len(daily)})
                 continue
@@ -316,7 +318,16 @@ def main():
             # Keep trades whose entry falls within this specific membership interval.
             trades = [t for t in trades if lo <= t["entry_date"] <= hi]
             all_trades.extend(trades)
-            coverage.append({"symbol": symbol, "token": token, "status": "OK", "rows": len(daily), "trades": len(trades)})
+            first_bar = daily.index.min().date() if len(daily) else None
+            last_bar = daily.index.max().date() if len(daily) else None
+            partial = first_bar is not None and first_bar > lo + timedelta(days=10)
+            coverage.append({
+                "symbol": symbol, "token": token,
+                "membership_source": row.get("source", "unknown"),
+                "status": "PARTIAL_HISTORY" if partial else "OK",
+                "first_bar": first_bar, "last_bar": last_bar,
+                "rows": len(daily), "trades": len(trades)
+            })
         except Exception as exc:
             coverage.append({"symbol": symbol, "token": token, "status": f"ERROR: {type(exc).__name__}: {exc}", "rows": 0})
 
@@ -367,6 +378,7 @@ def main():
         portfolio_yearly = pd.DataFrame()
 
     trades_df.to_csv(OUTPUT / "oldpal_swing_trades.csv", index=False)
+    coverage_df.to_csv(OUTPUT / "oldpal_swing_coverage.csv", index=False)
     with pd.ExcelWriter(OUTPUT / "oldpal_swing_trades.xlsx", engine="openpyxl") as writer:
         summary.to_excel(writer, sheet_name="Summary", index=False)
         trades_df.to_excel(writer, sheet_name="Trades", index=False)
@@ -376,7 +388,7 @@ def main():
         portfolio_yearly.to_excel(writer, sheet_name="Portfolio Yearly", index=False)
     print(f"Finished. Trades: {len(trades_df)}; membership rows: {len(membership)}")
     print(f"Workbook: {OUTPUT / 'oldpal_swing_trades.xlsx'}")
-    print(f"Coverage: {OUTPUT / 'oldpal_swing_trades.csv'}")
+    print(f"Coverage: {OUTPUT / 'oldpal_swing_coverage.csv'}")
 
 
 if __name__ == "__main__":
