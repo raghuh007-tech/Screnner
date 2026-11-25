@@ -184,7 +184,8 @@ def generate_trades(symbol: str, membership: pd.DataFrame, daily_all: pd.DataFra
         if exit_day < entry_day:
             continue
         gross = (exit_price / entry_price - 1) * 100
-        round_trip_cost = 2 * (cost_side_pct + slippage_side_pct)
+        sides_charged = 2 if status == "CLOSED" else 1
+        round_trip_cost = sides_charged * (cost_side_pct + slippage_side_pct)
         net = gross - round_trip_cost
         last_exit_day = exit_day
         trades.append({
@@ -197,6 +198,68 @@ def generate_trades(symbol: str, membership: pd.DataFrame, daily_all: pd.DataFra
             "net_return_pct": net, "status": status,
         })
     return trades
+
+
+def build_portfolio_curve(trades_df: pd.DataFrame, price_by_token: dict,
+                          cost_side_pct: float, slippage_side_pct: float):
+    """Daily equal-weight return across positions actually open during each session."""
+    if trades_df.empty:
+        return pd.DataFrame(columns=["date", "portfolio_return_pct", "equity", "drawdown_pct"]), {}
+
+    contributions = {}
+    side_cost = (cost_side_pct + slippage_side_pct) / 100.0
+    for _, trade in trades_df.iterrows():
+        token = str(trade["instrument_token"])
+        prices = price_by_token.get(token)
+        if prices is None or prices.empty:
+            continue
+        entry = pd.Timestamp(trade["entry_date"])
+        exit_ = pd.Timestamp(trade["exit_date"])
+        held = prices.loc[(prices.index >= entry) & (prices.index <= exit_)].sort_index()
+        if held.empty:
+            continue
+        for day, bar in held.iterrows():
+            if day == entry and day == exit_:
+                ret = float(trade["exit_price"]) / float(trade["entry_price"]) - 1
+            elif day == entry:
+                ret = float(bar["close"]) / float(trade["entry_price"]) - 1
+            else:
+                previous = prices.index[prices.index < day]
+                if len(previous) == 0:
+                    continue
+                prev_close = float(prices.loc[previous[-1], "close"])
+                mark = float(trade["exit_price"]) if day == exit_ else float(bar["close"])
+                ret = mark / prev_close - 1
+            if day == entry:
+                ret -= side_cost
+            if day == exit_ and trade["status"] == "CLOSED":
+                ret -= side_cost
+            contributions.setdefault(day, []).append(ret)
+
+    if not contributions:
+        return pd.DataFrame(columns=["date", "portfolio_return_pct", "equity", "drawdown_pct"]), {}
+    dates = pd.DatetimeIndex(sorted(contributions))
+    daily_returns = pd.Series(
+        {day: float(np.mean(contributions[day])) for day in dates}, dtype=float
+    ).sort_index()
+    equity = (1 + daily_returns).cumprod()
+    drawdown = equity / equity.cummax() - 1
+    curve = pd.DataFrame({
+        "date": dates,
+        "portfolio_return_pct": daily_returns.values * 100,
+        "equity": equity.values,
+        "drawdown_pct": drawdown.values * 100,
+    })
+    days = max((dates[-1] - dates[0]).days, 1)
+    cagr = float(equity.iloc[-1] ** (365.25 / days) - 1) * 100
+    metrics = {
+        "Portfolio total return %": float((equity.iloc[-1] - 1) * 100),
+        "Portfolio CAGR %": cagr,
+        "Portfolio max drawdown %": float(drawdown.min() * 100),
+        "Portfolio ending equity (starting at 1)": float(equity.iloc[-1]),
+        "Portfolio active sessions": int(len(curve)),
+    }
+    return curve, metrics
 
 
 def main():
@@ -223,6 +286,7 @@ def main():
     cost = float(os.getenv("COST_PER_SIDE_PCT", "0"))
     slip = float(os.getenv("SLIPPAGE_PER_SIDE_PCT", "0"))
     all_trades, coverage = [], []
+    price_by_token = {}
 
     for _, row in membership.iterrows():
         symbol, token = row["tradingsymbol"], row["instrument_token"]
@@ -245,7 +309,10 @@ def main():
             interval = pd.DataFrame([{
                 "valid_from": pd.Timestamp(lo), "valid_to": pd.Timestamp(hi)
             }])
+            price_by_token[token] = daily
             trades = generate_trades(symbol, interval, daily, cost, slip)
+            for trade in trades:
+                trade["instrument_token"] = token
             # Keep trades whose entry falls within this specific membership interval.
             trades = [t for t in trades if lo <= t["entry_date"] <= hi]
             all_trades.extend(trades)
@@ -262,7 +329,8 @@ def main():
     if not trades_df.empty:
         closed = trades_df[trades_df["status"] == "CLOSED"].copy()
         returns = closed["net_return_pct"]
-        summary = pd.DataFrame([
+        portfolio_curve, portfolio_metrics = build_portfolio_curve(trades_df, price_by_token, cost, slip)
+        summary_rows = [
             ["Total trades", len(trades_df)],
             ["Completed trades", len(closed)],
             ["Open positions marked to close", int((trades_df["status"] != "CLOSED").sum())],
@@ -273,7 +341,9 @@ def main():
             ["Worst trade % (completed, net)", float(returns.min()) if len(returns) else np.nan],
             ["Average holding days (completed)", float(closed["holding_calendar_days"].mean()) if len(closed) else np.nan],
             ["Cost per side %", cost], ["Slippage per side %", slip],
-        ], columns=["metric", "value"])
+        ]
+        summary_rows.extend([[k, v] for k, v in portfolio_metrics.items()])
+        summary = pd.DataFrame(summary_rows, columns=["metric", "value"])
         trades_df["entry_year"] = pd.to_datetime(trades_df["entry_date"]).dt.year
         yearly = trades_df.groupby("entry_year").agg(
             trades=("symbol", "count"),
@@ -282,8 +352,19 @@ def main():
             win_rate_pct=("net_return_pct", lambda s: (s > 0).mean() * 100),
         ).reset_index()
     else:
+        portfolio_curve = pd.DataFrame(columns=["date", "portfolio_return_pct", "equity", "drawdown_pct"])
         summary = pd.DataFrame(columns=["metric", "value"])
         yearly = pd.DataFrame()
+
+    if not portfolio_curve.empty:
+        portfolio_curve["year"] = pd.to_datetime(portfolio_curve["date"]).dt.year
+        portfolio_yearly = portfolio_curve.groupby("year").agg(
+            annual_return_pct=("portfolio_return_pct", lambda s: ((1 + s / 100).prod() - 1) * 100),
+            sessions=("date", "count"),
+            year_end_equity=("equity", "last"),
+        ).reset_index()
+    else:
+        portfolio_yearly = pd.DataFrame()
 
     trades_df.to_csv(OUTPUT / "oldpal_swing_trades.csv", index=False)
     with pd.ExcelWriter(OUTPUT / "oldpal_swing_trades.xlsx", engine="openpyxl") as writer:
@@ -291,6 +372,8 @@ def main():
         trades_df.to_excel(writer, sheet_name="Trades", index=False)
         yearly.to_excel(writer, sheet_name="Yearly", index=False)
         coverage_df.to_excel(writer, sheet_name="Data Coverage", index=False)
+        portfolio_curve.to_excel(writer, sheet_name="Portfolio Curve", index=False)
+        portfolio_yearly.to_excel(writer, sheet_name="Portfolio Yearly", index=False)
     print(f"Finished. Trades: {len(trades_df)}; membership rows: {len(membership)}")
     print(f"Workbook: {OUTPUT / 'oldpal_swing_trades.xlsx'}")
     print(f"Coverage: {OUTPUT / 'oldpal_swing_trades.csv'}")
