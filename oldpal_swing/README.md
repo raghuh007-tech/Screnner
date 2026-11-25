@@ -10,7 +10,7 @@ Standalone local backtest. This project is isolated from the live intraday scree
 - Long only. No extra filters.
 
 ## Data requirements and limitations
-Kite historical candles are available only for instrument tokens/data that Kite makes available to the account. The current instrument master is not a complete historical symbol/token archive. Kite does **not** provide historical Nifty 500 membership history. The helper uses a community reconstruction, not an official NSE PIT feed: https://github.com/aditya-jha/nse-historical-membership. Its published validation notes disclose membership drift before April 2018. Historical symbols with no current Kite instrument token are reported separately and are not silently fabricated.
+Kite historical candles are available only for instrument tokens/data that Kite makes available to the account. The current instrument master is not a complete historical symbol/token archive. Kite does **not** provide historical Nifty 500 membership history. The helper uses a community reconstruction, not an official NSE PIT feed: https://github.com/aditya-jha/nse-historical-membership. Its published coverage notes show stronger confidence from 2018 onward and pre-2018 membership/cardinality drift. The source data is current through 2026-10-13. Historical symbols with no current Kite instrument token are recorded in the Excel Data Coverage sheet and are not silently fabricated.
 
 Provide `data/universe_membership.csv` with columns:
 `tradingsymbol,instrument_token,valid_from,valid_to`
@@ -28,14 +28,14 @@ Provide `data/universe_membership.csv` with columns:
 4. Copy `.env.example` to `.env`. Add your Kite API key and current access token. Keep this file local; never commit or send credentials in chat.
 5. Run `python prepare_universe.py --from 2016-01-01 --to 2026-11-24`. This downloads a community-reconstructed point-in-time Nifty 500 membership table and maps symbols to the current Kite NSE instrument master. It writes `data/universe_membership.csv` and `data/unresolved_symbols.csv`.
 6. Review unresolved symbols and membership source types. The source project reports weaker/inexact membership reconstruction before April 2018; current Kite instruments cannot map every delisted or renamed security. Therefore the result is **not guaranteed fully survivorship-bias-free** unless those gaps are independently resolved.
-7. Run: `python run_backtest.py --from 2016-01-01 --to 2026-11-24`.
+7. Run: `python run_backtest.py --from 2016-01-01 --to 2026-11-24`. The workbook's **Data Coverage** tab includes both mapped symbols and unresolved historical symbols.
 
 The Kite access token is session-based and may need renewal. The script reads it locally from environment variables and never prints it.
 
 ## Data handling
 - Daily candles are cached under `data/cache/`.
 - API calls are throttled.
-- Missing token history is reported; it is not silently replaced with another instrument.
+- Missing token history and unresolved/delisted/renamed symbols are reported in **Data Coverage**; they do not stop the run. They are not silently replaced with another instrument.
 - Weekly candles are aggregated from daily candles, with Friday week-ending labels.
 - Incomplete final weekly candles are excluded from generating entry signals.
 
