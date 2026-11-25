@@ -25,7 +25,7 @@ Provide `data/universe_membership.csv` with columns:
 1. Python 3.10+.
 2. Create and activate a virtual environment: `python -m venv .venv`.
 3. Install: `pip install -r requirements.txt`.
-4. Copy `.env.example` to `.env`. Add your Kite API key, access token, and optionally API secret for your own token-refresh workflow. Keep this file local; never commit or send credentials in chat.
+4. Copy `.env.example` to `.env`. Add your Kite API key and current access token. Keep this file local; never commit or send credentials in chat.
 5. Run `python prepare_universe.py --from 2016-01-01 --to 2026-11-24`. This downloads a community-reconstructed point-in-time Nifty 500 membership table and maps symbols to the current Kite NSE instrument master. It writes `data/universe_membership.csv` and `data/unresolved_symbols.csv`.
 6. Review unresolved symbols and membership source types. The source project reports weaker/inexact membership reconstruction before April 2018; current Kite instruments cannot map every delisted or renamed security. Therefore the result is **not guaranteed fully survivorship-bias-free** unless those gaps are independently resolved.
 7. Run: `python run_backtest.py --from 2016-01-01 --to 2026-11-24`.
@@ -42,10 +42,11 @@ The Kite access token is session-based and may need renewal. The script reads it
 ## Outputs
 - `output/oldpal_swing_trades.xlsx`: summary, trade ledger, yearly performance, and data coverage.
 - `output/oldpal_swing_trades.csv`: flat trade ledger.
+- `output/oldpal_swing_coverage.csv`: per-symbol data coverage and unresolved history flags.
 - `data/cache/`: downloaded daily candles.
 
 ## Backtest interpretation
-Trade returns are calculated stock by stock. The workbook also includes a transparent equal-weight concurrent-position portfolio curve: on each day, the portfolio's gross daily return is the arithmetic mean of the returns of positions open during that day; uninvested cash earns zero. This is a research convention, not a user-approved live position-sizing rule. CAGR/drawdown from this curve must be interpreted with that convention in mind.
+Trade returns are calculated stock by stock. The workbook also includes an equal-weight active-position portfolio curve: capital is split evenly across positions open on each session, with daily equal-weight returns. This assumes daily rebalancing across active positions; maximum simultaneous positions and live sizing still need to be specified. CAGR/drawdown must be interpreted with this convention in mind.
 
 Costs are configurable in `.env` as percentage estimates. Defaults are zero until the user supplies a brokerage/slippage assumption; the report labels gross/net accordingly.
 
