@@ -153,12 +153,13 @@ def generate_trades(symbol: str, membership: pd.DataFrame, daily_all: pd.DataFra
         entries.append((signal_session, entry_day, float(d.loc[entry_day, "open"])))
 
     trades = []
-    used_entry_days = set()
-    for signal_day, entry_day, entry_price in entries:
-        if entry_day in used_entry_days:
+    last_exit_day = None
+    for signal_day, entry_day, entry_price in sorted(entries, key=lambda z: z[1]):
+        # One live position per symbol. Do not overlap successive weekly entries.
+        if last_exit_day is not None and entry_day <= last_exit_day:
             continue
-        used_entry_days.add(entry_day)
-        after_entry = d.index[d.index > entry_day]
+        # Daily signal is evaluated at close, including the entry session.
+        after_entry = d.index[d.index >= entry_day]
         exit_day = None
         exit_signal_day = None
         for day in after_entry:
@@ -183,6 +184,7 @@ def generate_trades(symbol: str, membership: pd.DataFrame, daily_all: pd.DataFra
         gross = (exit_price / entry_price - 1) * 100
         round_trip_cost = 2 * (cost_side_pct + slippage_side_pct)
         net = gross - round_trip_cost
+        last_exit_day = exit_day
         trades.append({
             "symbol": symbol, "entry_signal_week_end": signal_day.date(),
             "entry_date": entry_day.date(), "entry_price": entry_price,
@@ -227,7 +229,8 @@ def main():
         if lo >= hi:
             continue
         try:
-            daily = fetch_daily(kite, token, lo - timedelta(days=60), hi)
+            # Keep fetching after index removal so an open position can still exit.
+            daily = fetch_daily(kite, token, lo - timedelta(days=250), end)
             if daily.empty or len(daily) < 30:
                 coverage.append({"symbol": symbol, "token": token, "status": "INSUFFICIENT_DATA", "rows": len(daily)})
                 continue
