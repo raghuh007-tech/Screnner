@@ -335,6 +335,24 @@ def main():
 
     if not all_trades:
         print("No trades generated. Check historical membership/token mappings and API data coverage.")
+    # Include every historical member that could not be mapped to a current Kite token.
+    unresolved_path = DATA / "unresolved_symbols.csv"
+    if unresolved_path.exists():
+        unresolved = pd.read_csv(unresolved_path)
+        for _, missing in unresolved.iterrows():
+            coverage.append({
+                "symbol": missing.get("tradingsymbol", missing.get("symbol", "")),
+                "token": None,
+                "status": "NO_KITE_TOKEN_MAPPING",
+                "valid_from": missing.get("valid_from", ""),
+                "valid_to": missing.get("valid_to_inclusive", missing.get("valid_to", "")),
+                "reason": "Historical/delisted/renamed symbol not found in current Kite NSE instrument master",
+                "membership_source": missing.get("source", ""),
+                "source_url": missing.get("source_url", ""),
+                "notes": missing.get("notes", ""),
+                "rows": 0,
+                "trades": 0,
+            })
     trades_df = pd.DataFrame(all_trades)
     coverage_df = pd.DataFrame(coverage)
     OUTPUT.mkdir(parents=True, exist_ok=True)
