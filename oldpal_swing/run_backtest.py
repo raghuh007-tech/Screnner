@@ -31,8 +31,12 @@ def supertrend(df: pd.DataFrame, period: int = ATR_PERIOD, multiplier: float = M
         (x["high"] - prev_close).abs(),
         (x["low"] - prev_close).abs(),
     ], axis=1).max(axis=1)
-    # Wilder's moving average; min_periods prevents premature signals.
-    atr = tr.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    # Wilder ATR with the conventional initial SMA seed, then recursive RMA.
+    atr = pd.Series(np.nan, index=x.index, dtype=float)
+    if len(tr) >= period:
+        atr.iloc[period - 1] = float(tr.iloc[:period].mean())
+        for j in range(period, len(tr)):
+            atr.iloc[j] = (atr.iloc[j - 1] * (period - 1) + tr.iloc[j]) / period
     hl2 = (x["high"] + x["low"]) / 2
     basic_upper = hl2 + multiplier * atr
     basic_lower = hl2 - multiplier * atr
