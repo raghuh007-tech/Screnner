@@ -153,8 +153,11 @@ def generate_trades(symbol: str, membership: pd.DataFrame, daily_all: pd.DataFra
         if len(next_sessions) == 0:
             continue
         entry_day = next_sessions[0]
-        if not ((membership["valid_from"].iloc[0] <= entry_day) and
-                (membership["valid_to"].iloc[0] >= entry_day)):
+        member_on_entry = (
+            (membership["valid_from"] <= entry_day) &
+            (membership["valid_to"] >= entry_day)
+        ).any()
+        if not member_on_entry:
             continue
         entries.append((signal_session, entry_day, float(d.loc[entry_day, "open"])))
 
@@ -292,42 +295,37 @@ def main():
     all_trades, coverage = [], []
     price_by_token = {}
 
-    for _, row in membership.iterrows():
-        symbol, token = row["tradingsymbol"], row["instrument_token"]
-        lo = max(start, row["valid_from"].date())
-        hi = min(end, row["valid_to"].date())
-        if lo > hi:
-            continue
+    for (symbol, token), intervals in membership.groupby(["tradingsymbol", "instrument_token"], sort=True):
         try:
-            # Keep fetching after index removal so an open position can still exit.
             if token not in price_by_token:
                 price_by_token[token] = fetch_daily(kite, token, start - timedelta(days=250), end)
             daily = price_by_token[token]
             if daily.empty or len(daily) < 30:
                 coverage.append({"symbol": symbol, "token": token, "status": "INSUFFICIENT_DATA", "rows": len(daily)})
                 continue
-            # Restrict execution window to membership interval; retain pre-window history for ATR warm-up.
-            exec_daily = daily[(daily.index.date >= lo) & (daily.index.date <= hi)]
-            if exec_daily.empty:
+
+            # Keep only execution dates when this symbol was actually a Nifty 500 member.
+            exec_mask = pd.Series(False, index=daily.index)
+            for _, interval_row in intervals.iterrows():
+                lo_i, hi_i = interval_row["valid_from"], interval_row["valid_to"]
+                exec_mask |= (daily.index >= lo_i) & (daily.index <= hi_i)
+            if not exec_mask.any():
                 coverage.append({"symbol": symbol, "token": token, "status": "NO_EXECUTION_BARS", "rows": len(daily)})
                 continue
-            # Pass complete daily history for indicator warm-up; membership interval controls entries.
-            interval = pd.DataFrame([{
-                "valid_from": pd.Timestamp(lo), "valid_to": pd.Timestamp(hi)
-            }])
-            price_by_token[token] = daily
-            trades = generate_trades(symbol, interval, daily, cost, slip)
+
+            trades = generate_trades(symbol, intervals, daily, cost, slip)
             for trade in trades:
                 trade["instrument_token"] = token
-            # Keep trades whose entry falls within this specific membership interval.
-            trades = [t for t in trades if lo <= t["entry_date"] <= hi]
             all_trades.extend(trades)
-            first_bar = daily.index.min().date() if len(daily) else None
-            last_bar = daily.index.max().date() if len(daily) else None
-            partial = first_bar is not None and first_bar > lo + timedelta(days=10)
+
+            first_bar = daily.index.min().date()
+            last_bar = daily.index.max().date()
+            earliest_member = intervals["valid_from"].min().date()
+            partial = first_bar > earliest_member + timedelta(days=10)
+            sources = ",".join(sorted(set(intervals["source"].dropna().astype(str)))) if "source" in intervals else "unknown"
             coverage.append({
-                "symbol": symbol, "token": token,
-                "membership_source": row.get("source", "unknown"),
+                "symbol": symbol, "token": token, "membership_intervals": len(intervals),
+                "membership_source": sources,
                 "status": "PARTIAL_HISTORY" if partial else "OK",
                 "first_bar": first_bar, "last_bar": last_bar,
                 "rows": len(daily), "trades": len(trades)
