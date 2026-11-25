@@ -10,7 +10,7 @@ Standalone local backtest. This project is isolated from the live intraday scree
 - Long only. No extra filters.
 
 ## Data requirements and limitations
-Kite historical candles are available only for instrument tokens/data that Kite makes available to the account. The current instrument master is not a complete historical symbol/token archive. Kite does **not** provide historical Nifty 500 membership history.
+Kite historical candles are available only for instrument tokens/data that Kite makes available to the account. The current instrument master is not a complete historical symbol/token archive. Kite does **not** provide historical Nifty 500 membership history. The helper uses a community reconstruction, not an official NSE PIT feed: https://github.com/aditya-jha/nse-historical-membership. Its published validation notes disclose membership drift before April 2018. Historical symbols with no current Kite instrument token are reported separately and are not silently fabricated.
 
 Provide `data/universe_membership.csv` with columns:
 `tradingsymbol,instrument_token,valid_from,valid_to`
@@ -26,8 +26,9 @@ Provide `data/universe_membership.csv` with columns:
 2. Create and activate a virtual environment: `python -m venv .venv`.
 3. Install: `pip install -r requirements.txt`.
 4. Copy `.env.example` to `.env`. Add your Kite API key, access token, and optionally API secret for your own token-refresh workflow. Keep this file local; never commit or send credentials in chat.
-5. Add the verified historical membership/token CSV described above.
-6. Run: `python run_backtest.py --from 2016-01-01 --to 2026-11-24`.
+5. Run `python prepare_universe.py --from 2016-01-01 --to 2026-11-24`. This downloads a community-reconstructed point-in-time Nifty 500 membership table and maps symbols to the current Kite NSE instrument master. It writes `data/universe_membership.csv` and `data/unresolved_symbols.csv`.
+6. Review unresolved symbols and membership source types. The source project reports weaker/inexact membership reconstruction before April 2018; current Kite instruments cannot map every delisted or renamed security. Therefore the result is **not guaranteed fully survivorship-bias-free** unless those gaps are independently resolved.
+7. Run: `python run_backtest.py --from 2016-01-01 --to 2026-11-24`.
 
 The Kite access token is session-based and may need renewal. The script reads it locally from environment variables and never prints it.
 
