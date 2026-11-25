@@ -62,8 +62,10 @@ def supertrend(df: pd.DataFrame, period: int = ATR_PERIOD, multiplier: float = M
     x["st_lower"] = final_lower
     x["bullish"] = trend.astype("boolean")
     x["supertrend"] = np.where(x["bullish"].fillna(False), final_lower, final_upper)
-    x["flip_bull"] = x["bullish"].fillna(False) & ~x["bullish"].shift(1).fillna(False)
-    x["flip_bear"] = ~x["bullish"].fillna(True) & x["bullish"].shift(1).fillna(False)
+    # Suppress the first initialized trend state; it is not a genuine direction change.
+    warmed = atr.shift(1).notna()
+    x["flip_bull"] = x["bullish"].fillna(False) & ~x["bullish"].shift(1).fillna(False) & warmed
+    x["flip_bear"] = ~x["bullish"].fillna(True) & x["bullish"].shift(1).fillna(False) & warmed
     return x
 
 
@@ -226,7 +228,7 @@ def main():
         symbol, token = row["tradingsymbol"], row["instrument_token"]
         lo = max(start, row["valid_from"].date())
         hi = min(end, row["valid_to"].date())
-        if lo >= hi:
+        if lo > hi:
             continue
         try:
             # Keep fetching after index removal so an open position can still exit.
